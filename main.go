@@ -15,17 +15,14 @@ import (
 func main() {
 	cfg := loadConfig()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := newStore(ctx, cfg.MongoURI, cfg.DBName)
+	store, err := newStore(cfg.DBPath)
 	if err != nil {
-		log.Fatalf("Failed to connect to MongoDB: %v", err)
+		log.Fatalf("Failed to open database: %v", err)
 	}
-	defer store.disconnect(context.Background())
+	defer store.close()
 
-	if err := store.initIndexes(context.Background()); err != nil {
-		log.Printf("Warning: failed to create indexes: %v", err)
+	if err := store.initSchema(context.Background()); err != nil {
+		log.Fatalf("Failed to init schema: %v", err)
 	}
 
 	hash, err := hashPassword(cfg.AdminPassword)

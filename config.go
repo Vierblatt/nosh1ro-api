@@ -4,8 +4,7 @@ import "os"
 
 type Config struct {
 	Port          string
-	MongoURI      string
-	DBName        string
+	DBPath        string
 	JWTSecret     string
 	AdminUsername string
 	AdminPassword string
@@ -16,8 +15,7 @@ type Config struct {
 func loadConfig() Config {
 	cfg := Config{
 		Port:          env("PORT", "8080"),
-		MongoURI:      env("MONGO_URI", "mongodb://localhost:27017"),
-		DBName:        env("DB_NAME", "nosh1ro_blog"),
+		DBPath:        env("DB_PATH", "/opt/blog-api/blog.db"),
 		JWTSecret:     env("JWT_SECRET", ""),
 		AdminUsername: env("ADMIN_USERNAME", "admin"),
 		AdminPassword: env("ADMIN_PASSWORD", ""),

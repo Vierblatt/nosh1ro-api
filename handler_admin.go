@@ -1,13 +1,13 @@
 package main
 
 import (
+	"database/sql"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 func handleAdminLogin(store *Store, cfg Config) gin.HandlerFunc {
@@ -199,7 +199,7 @@ func handleAdminDeletePost(store *Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
 		if err := store.deletePost(c.Request.Context(), id); err != nil {
-			if err == mongo.ErrNoDocuments {
+			if err == sql.ErrNoRows {
 				c.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
 				return
 			}
