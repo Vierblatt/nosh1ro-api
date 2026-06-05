@@ -33,7 +33,7 @@ func newStore(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(1) // SQLite serializes writes; single writer is fine with WAL
 	return &Store{db: db}, nil
 }
 
@@ -132,23 +132,29 @@ func (s *Store) findPosts(ctx context.Context, f PostFilter, page, size int64) (
 	}
 	defer rows.Close()
 
-	var postList []Post
+	var posts []Post
+	var ids []string
 	for rows.Next() {
 		p, err := scanPost(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan post: %w", err)
 		}
-		tags, err := s.postTags(ctx, p.ID)
-		if err != nil {
-			return nil, fmt.Errorf("get tags: %w", err)
-		}
-		p.Tags = tags
-		postList = append(postList, *p)
+		posts = append(posts, *p)
+		ids = append(ids, p.ID)
 	}
-	if postList == nil {
-		postList = []Post{}
+	rows.Close()
+
+	tagMap, err := s.batchPostTags(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("batch tags: %w", err)
 	}
-	return &PostListResult{Posts: postList, Total: total, Page: page, Size: size}, nil
+	for i := range posts {
+		posts[i].Tags = tagMap[posts[i].ID]
+	}
+	if posts == nil {
+		posts = []Post{}
+	}
+	return &PostListResult{Posts: posts, Total: total, Page: page, Size: size}, nil
 }
 
 func (s *Store) countPosts(ctx context.Context, f PostFilter) (int64, error) {
@@ -284,6 +290,34 @@ func (s *Store) postTags(ctx context.Context, postID string) ([]string, error) {
 		tags = []string{}
 	}
 	return tags, nil
+}
+
+func (s *Store) batchPostTags(ctx context.Context, ids []string) (map[string][]string, error) {
+	if len(ids) == 0 {
+		return map[string][]string{}, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := "SELECT post_id, tag FROM post_tags WHERE post_id IN (" + strings.Join(placeholders, ",") + ") ORDER BY tag"
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch post tags: %w", err)
+	}
+	defer rows.Close()
+
+	m := make(map[string][]string)
+	for rows.Next() {
+		var postID, tag string
+		if err := rows.Scan(&postID, &tag); err != nil {
+			return nil, fmt.Errorf("scan tag: %w", err)
+		}
+		m[postID] = append(m[postID], tag)
+	}
+	return m, nil
 }
 
 func (s *Store) setPostTagsTx(ctx context.Context, tx *sql.Tx, postID string, tags []string) error {
