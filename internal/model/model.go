@@ -49,6 +49,7 @@ type AdminUser struct {
 	Email            string
 	Verified         bool
 	VerifyToken      string
+	Role             string
 	CreatedAt        time.Time
 }
 

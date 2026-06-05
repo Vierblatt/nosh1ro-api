@@ -34,7 +34,7 @@ func TestHashPasswordDeterministic(t *testing.T) {
 
 func TestGenerateAndValidateToken(t *testing.T) {
 	secret := "test-secret"
-	token, err := GenerateToken(secret, "admin")
+	token, err := GenerateToken(secret, "admin", "admin")
 	if err != nil {
 		t.Fatalf("generateToken: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestGenerateAndValidateToken(t *testing.T) {
 }
 
 func TestValidateToken_WrongSecret(t *testing.T) {
-	token, _ := GenerateToken("good-secret", "admin")
+	token, _ := GenerateToken("good-secret", "admin", "admin")
 	_, err := ValidateToken("wrong-secret", token)
 	if err == nil {
 		t.Error("validateToken should fail with wrong secret")
@@ -61,7 +61,7 @@ func TestValidateToken_WrongSecret(t *testing.T) {
 
 func TestValidateToken_Tampered(t *testing.T) {
 	secret := "secret"
-	token, _ := GenerateToken(secret, "admin")
+	token, _ := GenerateToken(secret, "admin", "admin")
 	tampered := token + "x"
 	_, err := ValidateToken(secret, tampered)
 	if err == nil {

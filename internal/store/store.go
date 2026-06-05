@@ -62,6 +62,7 @@ func (s *Store) InitSchema(ctx context.Context) error {
 		email         TEXT NOT NULL DEFAULT '',
 		verified      INTEGER NOT NULL DEFAULT 0,
 		verify_token  TEXT NOT NULL DEFAULT '',
+		role          TEXT NOT NULL DEFAULT 'user',
 		created_at    TEXT NOT NULL DEFAULT ''
 	);
 
@@ -293,6 +294,7 @@ func (s *Store) MigrateAdminSchema(ctx context.Context) error {
 		{"verified", "INTEGER NOT NULL DEFAULT 0"},
 		{"verify_token", "TEXT NOT NULL DEFAULT ''"},
 		{"created_at", "TEXT NOT NULL DEFAULT ''"},
+		{"role", "TEXT NOT NULL DEFAULT 'user'"},
 	}
 
 	for _, col := range newCols {
@@ -304,13 +306,13 @@ func (s *Store) MigrateAdminSchema(ctx context.Context) error {
 		}
 	}
 
-	_, err = s.db.ExecContext(ctx, "UPDATE admin SET verified = 1 WHERE verified = 0 AND username != ''")
+	_, err = s.db.ExecContext(ctx, "UPDATE admin SET role = 'admin' WHERE role = 'user' AND email = ''")
 	return err
 }
 
 func (s *Store) UpsertAdmin(ctx context.Context, username, passwordHash string) error {
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO admin (username, password_hash, verified, created_at) VALUES (?, ?, 1, ?) ON CONFLICT(username) DO UPDATE SET password_hash = ?",
+		"INSERT INTO admin (username, password_hash, verified, role, created_at) VALUES (?, ?, 1, 'admin', ?) ON CONFLICT(username) DO UPDATE SET password_hash = ?",
 		username, passwordHash, time.Now().Format(time.RFC3339), passwordHash)
 	return err
 }
@@ -318,8 +320,8 @@ func (s *Store) UpsertAdmin(ctx context.Context, username, passwordHash string) 
 func (s *Store) FindAdmin(ctx context.Context, username string) (*model.AdminUser, error) {
 	var u model.AdminUser
 	var createdAt string
-	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash, email, verified, verify_token, created_at FROM admin WHERE username = ?", username).
-		Scan(&u.Username, &u.PasswordHash, &u.Email, &u.Verified, &u.VerifyToken, &createdAt)
+	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash, email, verified, verify_token, role, created_at FROM admin WHERE username = ?", username).
+		Scan(&u.Username, &u.PasswordHash, &u.Email, &u.Verified, &u.VerifyToken, &u.Role, &createdAt)
 	if err != nil {
 		return nil, err
 	}
@@ -330,8 +332,8 @@ func (s *Store) FindAdmin(ctx context.Context, username string) (*model.AdminUse
 func (s *Store) FindAdminByEmail(ctx context.Context, email string) (*model.AdminUser, error) {
 	var u model.AdminUser
 	var createdAt string
-	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash, email, verified, verify_token, created_at FROM admin WHERE email = ?", email).
-		Scan(&u.Username, &u.PasswordHash, &u.Email, &u.Verified, &u.VerifyToken, &createdAt)
+	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash, email, verified, verify_token, role, created_at FROM admin WHERE email = ?", email).
+		Scan(&u.Username, &u.PasswordHash, &u.Email, &u.Verified, &u.VerifyToken, &u.Role, &createdAt)
 	if err != nil {
 		return nil, err
 	}
@@ -342,8 +344,8 @@ func (s *Store) FindAdminByEmail(ctx context.Context, email string) (*model.Admi
 func (s *Store) FindAdminByVerifyToken(ctx context.Context, token string) (*model.AdminUser, error) {
 	var u model.AdminUser
 	var createdAt string
-	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash, email, verified, verify_token, created_at FROM admin WHERE verify_token = ?", token).
-		Scan(&u.Username, &u.PasswordHash, &u.Email, &u.Verified, &u.VerifyToken, &createdAt)
+	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash, email, verified, verify_token, role, created_at FROM admin WHERE verify_token = ?", token).
+		Scan(&u.Username, &u.PasswordHash, &u.Email, &u.Verified, &u.VerifyToken, &u.Role, &createdAt)
 	if err != nil {
 		return nil, err
 	}
@@ -358,9 +360,13 @@ func (s *Store) CountAdmins(ctx context.Context) (int64, error) {
 }
 
 func (s *Store) CreateAdmin(ctx context.Context, u *model.AdminUser) error {
+	role := u.Role
+	if role == "" {
+		role = "user"
+	}
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO admin (username, password_hash, email, verified, verify_token, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		u.Username, u.PasswordHash, u.Email, boolToInt(u.Verified), u.VerifyToken, u.CreatedAt.Format(time.RFC3339))
+		"INSERT INTO admin (username, password_hash, email, verified, verify_token, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		u.Username, u.PasswordHash, u.Email, boolToInt(u.Verified), u.VerifyToken, role, u.CreatedAt.Format(time.RFC3339))
 	return err
 }
 

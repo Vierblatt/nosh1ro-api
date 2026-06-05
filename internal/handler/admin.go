@@ -61,7 +61,7 @@ func (ac *AdminController) handleLogin(c *gin.Context) {
 		return
 	}
 
-	token, err := auth.GenerateToken(ac.secret, req.Username)
+	token, err := auth.GenerateToken(ac.secret, req.Username, u.Role)
 	if err != nil {
 		slog.Error("generate token", "error", err)
 		respondError(c, ErrInternal)

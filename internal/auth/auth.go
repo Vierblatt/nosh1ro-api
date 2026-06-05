@@ -11,21 +11,23 @@ import (
 
 type Claims struct {
 	Username string `json:"username"`
+	Role     string `json:"role"`
 	Purpose  string `json:"purpose,omitempty"`
 	jwt.RegisteredClaims
 }
 
-func GenerateToken(secret, username string) (string, error) {
-	return generateToken(secret, username, "auth", 72*time.Hour)
+func GenerateToken(secret, username, role string) (string, error) {
+	return generateToken(secret, username, role, "auth", 72*time.Hour)
 }
 
 func GenerateVerificationToken(secret, username string) (string, error) {
-	return generateToken(secret, username, "verify", 24*time.Hour)
+	return generateToken(secret, username, "", "verify", 24*time.Hour)
 }
 
-func generateToken(secret, username, purpose string, ttl time.Duration) (string, error) {
+func generateToken(secret, username, role, purpose string, ttl time.Duration) (string, error) {
 	claims := Claims{
 		Username: username,
+		Role:     role,
 		Purpose:  purpose,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),

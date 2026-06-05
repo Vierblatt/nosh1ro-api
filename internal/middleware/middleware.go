@@ -39,6 +39,10 @@ func Auth(secret string) gin.HandlerFunc {
 			return
 		}
 		c.Set("admin_user", claims.Username)
+		if claims.Role != "admin" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin access required"})
+			return
+		}
 		c.Next()
 	}
 }
