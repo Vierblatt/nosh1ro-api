@@ -57,7 +57,7 @@ func newTestRouter(s *store.Store) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	pc := NewPostController(s)
+	pc := NewPostController(s, nil, nil)
 	pc.Register(r.Group("/api"))
 
 	fc := NewFeedController(s, s, "test-blog")
@@ -71,7 +71,7 @@ func newTestAdminRouter(s *store.Store, jwtSecret string) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	ac := NewAdminController(s, s, jwtSecret)
+	ac := NewAdminController(s, s, jwtSecret, nil, nil, nil)
 	ac.Register(r.Group("/api/admin"))
 
 	return r

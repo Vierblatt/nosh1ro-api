@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/Vierblatt/nosh1ro-api/internal/auth"
+	esclient "github.com/Vierblatt/nosh1ro-api/internal/es"
+	"github.com/Vierblatt/nosh1ro-api/internal/events"
 	"github.com/Vierblatt/nosh1ro-api/internal/markdown"
 	"github.com/Vierblatt/nosh1ro-api/internal/middleware"
 	"github.com/Vierblatt/nosh1ro-api/internal/model"
@@ -16,10 +19,18 @@ type AdminController struct {
 	store  PostStore
 	admin  AdminStore
 	secret string
+	es     *esclient.Client
+	cache  cacheInvalidator
+	events *events.Client
 }
 
-func NewAdminController(store PostStore, admin AdminStore, jwtSecret string) *AdminController {
-	return &AdminController{store: store, admin: admin, secret: jwtSecret}
+type cacheInvalidator interface {
+	DeletePattern(ctx context.Context, pattern string) error
+	Del(ctx context.Context, keys ...string) error
+}
+
+func NewAdminController(store PostStore, admin AdminStore, jwtSecret string, es *esclient.Client, cache cacheInvalidator, ev *events.Client) *AdminController {
+	return &AdminController{store: store, admin: admin, secret: jwtSecret, es: es, cache: cache, events: ev}
 }
 
 func (ac *AdminController) Register(admin *gin.RouterGroup) {
@@ -34,6 +45,7 @@ func (ac *AdminController) Register(admin *gin.RouterGroup) {
 		protected.DELETE("/posts/:id", ac.handleDeletePost)
 		protected.GET("/settings", ac.handleGetSettings)
 		protected.PUT("/settings", ac.handleUpdateSettings)
+		protected.POST("/reindex", ac.handleReindex)
 	}
 }
 
@@ -122,6 +134,11 @@ func (ac *AdminController) handleCreatePost(c *gin.Context) {
 		respondError(c, ErrInternal)
 		return
 	}
+
+	ac.syncES(c.Request.Context(), p)
+	ac.invalidateCache(c.Request.Context(), p.ID)
+	ac.publishEvent(c.Request.Context(), "post.created", p.ID)
+
 	c.JSON(http.StatusCreated, p)
 }
 
@@ -173,6 +190,11 @@ func (ac *AdminController) handleUpdatePost(c *gin.Context) {
 		respondError(c, ErrInternal)
 		return
 	}
+
+	ac.syncES(c.Request.Context(), existing)
+	ac.invalidateCache(c.Request.Context(), existing.ID)
+	ac.publishEvent(c.Request.Context(), "post.updated", existing.ID)
+
 	c.JSON(http.StatusOK, existing)
 }
 
@@ -182,7 +204,36 @@ func (ac *AdminController) handleDeletePost(c *gin.Context) {
 		respondError(c, ErrNotFound)
 		return
 	}
+
+	if ac.es != nil {
+		if err := ac.es.DeletePost(c.Request.Context(), id); err != nil {
+			slog.Warn("es delete", "error", err, "id", id)
+		}
+	}
+	ac.invalidateCache(c.Request.Context(), id)
+	ac.publishEvent(c.Request.Context(), "post.deleted", id)
+
 	c.JSON(http.StatusOK, gin.H{"deleted": id})
+}
+
+func (ac *AdminController) handleReindex(c *gin.Context) {
+	if ac.es == nil {
+		respondError(c, &AppError{Code: "NOT_CONFIGURED", Message: "es not configured", Status: 503})
+		return
+	}
+	filter := model.PostFilter{}
+	result, err := ac.store.FindPosts(c.Request.Context(), filter, 1, 1000)
+	if err != nil {
+		slog.Error("reindex list", "error", err)
+		respondError(c, ErrInternal)
+		return
+	}
+	if err := ac.es.BulkIndex(c.Request.Context(), result.Posts); err != nil {
+		slog.Error("reindex", "error", err)
+		respondError(c, ErrInternal)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"indexed": len(result.Posts)})
 }
 
 func (ac *AdminController) handleGetSettings(c *gin.Context) {
@@ -221,4 +272,35 @@ func (ac *AdminController) handleUpdateSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, bs)
+}
+
+func (ac *AdminController) syncES(ctx context.Context, p *model.Post) {
+	if ac.es == nil || p.Status != string(model.StatusPublished) {
+		return
+	}
+	if err := ac.es.IndexPost(ctx, p); err != nil {
+		slog.Warn("es sync", "error", err, "id", p.ID)
+	}
+}
+
+func (ac *AdminController) invalidateCache(ctx context.Context, postID string) {
+	if ac.cache == nil {
+		return
+	}
+	if err := ac.cache.Del(ctx, "post:"+postID, "tags:all"); err != nil {
+		slog.Warn("cache del", "error", err)
+	}
+	if err := ac.cache.DeletePattern(ctx, "posts:list:*"); err != nil {
+		slog.Warn("cache pattern delete", "error", err)
+	}
+}
+
+func (ac *AdminController) publishEvent(ctx context.Context, eventType, postID string) {
+	if ac.events == nil {
+		return
+	}
+	ev := events.PostEvent{Type: eventType, ID: postID}
+	if err := ac.events.Publish(ctx, eventType, ev); err != nil {
+		slog.Warn("publish event", "error", err, "type", eventType)
+	}
 }

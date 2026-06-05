@@ -20,6 +20,10 @@ type Config struct {
 	SMTPPassword  string
 	SMTPFrom      string
 	BaseURL       string
+	ESURL         string
+	RedisURL      string
+	RabbitMQURL   string
+	ViewsPassword string
 }
 
 func Load() (*Config, error) {
@@ -37,6 +41,10 @@ func Load() (*Config, error) {
 		SMTPPassword:  env("SMTP_PASSWORD", ""),
 		SMTPFrom:      env("SMTP_FROM", ""),
 		BaseURL:       env("BASE_URL", "https://nosh1ro.top"),
+		ESURL:         env("ES_URL", ""),
+		RedisURL:      env("REDIS_URL", ""),
+		RabbitMQURL:   env("RABBITMQ_URL", ""),
+		ViewsPassword: env("VIEWS_PASSWORD", ""),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
