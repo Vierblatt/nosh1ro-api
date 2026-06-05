@@ -44,14 +44,14 @@ func DecryptContent(enc *model.EncryptionData, password string) (string, error) 
 	return string(plain), nil
 }
 
-func LoadEncryptionJSONField(path, field string) string {
+func LoadEncryptionJSONField(path, field string) (string, error) {
 	var m map[string]string
 	data, err := os.ReadFile(path)
 	if err != nil {
-		panic("failed to read " + path + ": " + err.Error())
+		return "", fmt.Errorf("read %s: %w", path, err)
 	}
 	if err := json.Unmarshal(data, &m); err != nil {
-		panic("failed to parse " + path + ": " + err.Error())
+		return "", fmt.Errorf("parse %s: %w", path, err)
 	}
-	return m[field]
+	return m[field], nil
 }

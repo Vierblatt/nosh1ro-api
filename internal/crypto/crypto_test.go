@@ -61,13 +61,16 @@ func TestLoadEncryptionJSONField(t *testing.T) {
 	os.WriteFile("_test.json", []byte(`{"salt":"abc","nonce":"def","ciphertext":"ghi"}`), 0644)
 	defer os.Remove("_test.json")
 
-	if s := LoadEncryptionJSONField("_test.json", "salt"); s != "abc" {
-		t.Errorf("salt = %q, want %q", s, "abc")
+	s, err := LoadEncryptionJSONField("_test.json", "salt")
+	if err != nil || s != "abc" {
+		t.Errorf("salt = %q, err = %v, want %q", s, err, "abc")
 	}
-	if s := LoadEncryptionJSONField("_test.json", "nonce"); s != "def" {
-		t.Errorf("nonce = %q, want %q", s, "def")
+	s, err = LoadEncryptionJSONField("_test.json", "nonce")
+	if err != nil || s != "def" {
+		t.Errorf("nonce = %q, err = %v, want %q", s, err, "def")
 	}
-	if s := LoadEncryptionJSONField("_test.json", "ciphertext"); s != "ghi" {
-		t.Errorf("ciphertext = %q, want %q", s, "ghi")
+	s, err = LoadEncryptionJSONField("_test.json", "ciphertext")
+	if err != nil || s != "ghi" {
+		t.Errorf("ciphertext = %q, err = %v, want %q", s, err, "ghi")
 	}
 }

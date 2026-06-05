@@ -20,6 +20,15 @@ func Posts(store *store.Store) error {
 		return nil
 	}
 
+	goPlan, err := loadEncryptionFile("go-plan-encryption.json")
+	if err != nil {
+		return err
+	}
+	blogDeploy, err := loadEncryptionFile("encryption.json")
+	if err != nil {
+		return err
+	}
+
 	now := time.Now()
 	type seedPost struct {
 		post     model.Post
@@ -35,13 +44,7 @@ func Posts(store *store.Store) error {
 		},
 		{
 			post: model.Post{ID: "go-plan", Title: "Go 学习路线图", Date: "2026-06-03", Status: "published", Category: "编程",
-				Tags: []string{"Go"},
-				Encrypted: true,
-				Encryption: &model.EncryptionData{
-					Salt: crypto.LoadEncryptionJSONField("go-plan-encryption.json", "salt"),
-					Nonce: crypto.LoadEncryptionJSONField("go-plan-encryption.json", "nonce"),
-					Ciphertext: crypto.LoadEncryptionJSONField("go-plan-encryption.json", "ciphertext"),
-				},
+				Tags: []string{"Go"}, Encrypted: true, Encryption: goPlan,
 			},
 		},
 		{
@@ -52,13 +55,7 @@ func Posts(store *store.Store) error {
 		},
 		{
 			post: model.Post{ID: "blog-deploy", Title: "博客部署：从 DNS 到安全加固的完整链路", Date: "2026-06-02", Status: "published", Category: "DevOps",
-				Tags: []string{"Nginx", "部署", "安全"},
-				Encrypted: true,
-				Encryption: &model.EncryptionData{
-					Salt: crypto.LoadEncryptionJSONField("encryption.json", "salt"),
-					Nonce: crypto.LoadEncryptionJSONField("encryption.json", "nonce"),
-					Ciphertext: crypto.LoadEncryptionJSONField("encryption.json", "ciphertext"),
-				},
+				Tags: []string{"Nginx", "部署", "安全"}, Encrypted: true, Encryption: blogDeploy,
 			},
 		},
 		{
@@ -88,6 +85,22 @@ func Posts(store *store.Store) error {
 		}
 	}
 	return nil
+}
+
+func loadEncryptionFile(path string) (*model.EncryptionData, error) {
+	salt, err := crypto.LoadEncryptionJSONField(path, "salt")
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := crypto.LoadEncryptionJSONField(path, "nonce")
+	if err != nil {
+		return nil, err
+	}
+	ciphertext, err := crypto.LoadEncryptionJSONField(path, "ciphertext")
+	if err != nil {
+		return nil, err
+	}
+	return &model.EncryptionData{Salt: salt, Nonce: nonce, Ciphertext: ciphertext}, nil
 }
 
 const fullstackReviewMD = `把 nosh1ro.top 从"公网端口全开"改成了"零入站端口"，整个过程踩了不少坑，顺便把整个项目的技术栈从头复盘一遍。
