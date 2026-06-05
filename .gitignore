@@ -4,6 +4,8 @@
 # Binaries for programs and plugins
 *.exe
 *.exe~
+server
+server.exe
 *.dll
 *.so
 *.dylib
@@ -28,5 +30,8 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+
+# Claude Code
+.claude/
