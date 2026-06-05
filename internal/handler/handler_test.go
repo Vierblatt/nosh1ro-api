@@ -25,7 +25,7 @@ import (
 func setupTestDB(t *testing.T) *store.Store {
 	t.Helper()
 	dir := t.TempDir()
-	s, err := store.New(dir + "/blog.db")
+	s, err := store.New("sqlite", dir+"/blog.db")
 	if err != nil {
 		t.Fatalf("store.New: %v", err)
 	}

@@ -32,7 +32,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := store.New(cfg.DBPath)
+	db, err := store.New(cfg.DBType, cfg.DBDSN)
 	if err != nil {
 		slog.Error("database", "error", err)
 		os.Exit(1)
