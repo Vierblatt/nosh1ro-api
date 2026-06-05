@@ -113,7 +113,7 @@ func (pc *PostController) handleSearch(c *gin.Context) {
 			Tags:     p.Tags,
 		})
 	}
-	c.JSON(http.StatusOK, esclient.SearchResult{Posts: hits, Total: result.Total})
+	c.JSON(http.StatusOK, esclient.SearchResult{Posts: hits, Total: result.Total, Aggregations: map[string][]esclient.AggBucket{}})
 }
 
 func (pc *PostController) handlePosts(c *gin.Context) {

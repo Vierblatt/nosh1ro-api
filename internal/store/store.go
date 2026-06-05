@@ -39,111 +39,138 @@ func New(dbType, dsn string) (*Store, error) {
 }
 
 func (s *Store) InitSchema(ctx context.Context) error {
-	var schema string
 	if s.dialect == "mysql" {
-		schema = `
-		CREATE TABLE IF NOT EXISTS posts (
-			id           VARCHAR(255) PRIMARY KEY,
-			title        TEXT NOT NULL,
-			content      TEXT NOT NULL,
-			content_html TEXT NOT NULL,
-			summary      TEXT NOT NULL,
-			date         TEXT NOT NULL,
-			category     VARCHAR(255) NOT NULL DEFAULT '',
-			status       VARCHAR(50) NOT NULL DEFAULT 'draft',
-			encrypted    TINYINT(1) NOT NULL DEFAULT 0,
-			enc_salt     TEXT NOT NULL,
-			enc_nonce    TEXT NOT NULL,
-			enc_cipher   TEXT NOT NULL,
-			created_at   TEXT NOT NULL,
-			updated_at   TEXT NOT NULL
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-		CREATE INDEX idx_posts_date ON posts(date DESC);
-		CREATE INDEX idx_posts_status ON posts(status);
-
-		CREATE TABLE IF NOT EXISTS tags (
-			name VARCHAR(255) PRIMARY KEY
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-		CREATE TABLE IF NOT EXISTS post_tags (
-			post_id VARCHAR(255) NOT NULL,
-			tag     VARCHAR(255) NOT NULL,
-			PRIMARY KEY (post_id, tag),
-			FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
-			FOREIGN KEY (tag) REFERENCES tags(name) ON DELETE CASCADE
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-		CREATE INDEX idx_post_tags_tag ON post_tags(tag);
-
-		CREATE TABLE IF NOT EXISTS admin (
-			username      VARCHAR(255) PRIMARY KEY,
-			password_hash TEXT NOT NULL,
-			email         VARCHAR(255) NOT NULL DEFAULT '',
-			verified      TINYINT(1) NOT NULL DEFAULT 0,
-			verify_token  TEXT NOT NULL,
-			role          VARCHAR(50) NOT NULL DEFAULT 'user',
-			created_at    TEXT NOT NULL
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-		CREATE TABLE IF NOT EXISTS settings (
-			id       INT AUTO_INCREMENT PRIMARY KEY,
-			title    TEXT NOT NULL,
-			subtitle TEXT NOT NULL
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-		INSERT IGNORE INTO settings (id, title, subtitle) VALUES (1, '', '');
-		`
-	} else {
-		schema = `
-		CREATE TABLE IF NOT EXISTS posts (
-			id           TEXT PRIMARY KEY,
-			title        TEXT NOT NULL,
-			content      TEXT NOT NULL DEFAULT '',
-			content_html TEXT NOT NULL DEFAULT '',
-			summary      TEXT NOT NULL DEFAULT '',
-			date         TEXT NOT NULL,
-			category     TEXT NOT NULL DEFAULT '',
-			status       TEXT NOT NULL DEFAULT 'draft',
-			encrypted    INTEGER NOT NULL DEFAULT 0,
-			enc_salt     TEXT NOT NULL DEFAULT '',
-			enc_nonce    TEXT NOT NULL DEFAULT '',
-			enc_cipher   TEXT NOT NULL DEFAULT '',
-			created_at   TEXT NOT NULL,
-			updated_at   TEXT NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_posts_date ON posts(date DESC);
-		CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);
-
-		CREATE TABLE IF NOT EXISTS tags (
-			name TEXT PRIMARY KEY
-		);
-
-		CREATE TABLE IF NOT EXISTS post_tags (
-			post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-			tag     TEXT NOT NULL REFERENCES tags(name) ON DELETE CASCADE,
-			PRIMARY KEY (post_id, tag)
-		);
-		CREATE INDEX IF NOT EXISTS idx_post_tags_tag ON post_tags(tag);
-
-		CREATE TABLE IF NOT EXISTS admin (
-			username      TEXT PRIMARY KEY,
-			password_hash TEXT NOT NULL,
-			email         TEXT NOT NULL DEFAULT '',
-			verified      INTEGER NOT NULL DEFAULT 0,
-			verify_token  TEXT NOT NULL DEFAULT '',
-			role          TEXT NOT NULL DEFAULT 'user',
-			created_at    TEXT NOT NULL DEFAULT ''
-		);
-
-		CREATE TABLE IF NOT EXISTS settings (
-			id       INTEGER PRIMARY KEY DEFAULT 1,
-			title    TEXT NOT NULL DEFAULT '',
-			subtitle TEXT NOT NULL DEFAULT ''
-		);
-		INSERT OR IGNORE INTO settings (id, title, subtitle) VALUES (1, '', '');
-		`
+		return s.initMySQLSchema(ctx)
 	}
+	return s.initSQLiteSchema(ctx)
+}
+
+func (s *Store) initMySQLSchema(ctx context.Context) error {
+	schema := `
+	CREATE TABLE IF NOT EXISTS posts (
+		id           VARCHAR(255) PRIMARY KEY,
+		title        TEXT NOT NULL,
+		content      TEXT NOT NULL,
+		content_html TEXT NOT NULL,
+		summary      TEXT NOT NULL,
+		date         VARCHAR(255) NOT NULL,
+		category     VARCHAR(255) NOT NULL DEFAULT '',
+		status       VARCHAR(50) NOT NULL DEFAULT 'draft',
+		encrypted    TINYINT(1) NOT NULL DEFAULT 0,
+		enc_salt     TEXT NOT NULL,
+		enc_nonce    TEXT NOT NULL,
+		enc_cipher   MEDIUMTEXT NOT NULL,
+		created_at   VARCHAR(255) NOT NULL,
+		updated_at   VARCHAR(255) NOT NULL
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+	CREATE TABLE IF NOT EXISTS tags (
+		name VARCHAR(255) PRIMARY KEY
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+	CREATE TABLE IF NOT EXISTS post_tags (
+		post_id VARCHAR(255) NOT NULL,
+		tag     VARCHAR(255) NOT NULL,
+		PRIMARY KEY (post_id, tag),
+		FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+		FOREIGN KEY (tag) REFERENCES tags(name) ON DELETE CASCADE
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+	CREATE TABLE IF NOT EXISTS admin (
+		username      VARCHAR(255) PRIMARY KEY,
+		password_hash TEXT NOT NULL,
+		email         VARCHAR(255) NOT NULL DEFAULT '',
+		verified      TINYINT(1) NOT NULL DEFAULT 0,
+		verify_token  TEXT NOT NULL,
+		role          VARCHAR(50) NOT NULL DEFAULT 'user',
+		created_at    TEXT NOT NULL
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+	CREATE TABLE IF NOT EXISTS settings (
+		id       INT AUTO_INCREMENT PRIMARY KEY,
+		title    TEXT NOT NULL,
+		subtitle TEXT NOT NULL
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+	INSERT IGNORE INTO settings (id, title, subtitle) VALUES (1, '', '');
+	`
+	if _, err := s.db.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+
+	indexes := []string{
+		"CREATE INDEX idx_posts_date ON posts(date DESC)",
+		"CREATE INDEX idx_posts_status ON posts(status)",
+		"CREATE INDEX idx_post_tags_tag ON post_tags(tag)",
+	}
+	for _, idx := range indexes {
+		if _, err := s.db.ExecContext(ctx, idx); err != nil {
+			if isDupKeyErr(err) {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) initSQLiteSchema(ctx context.Context) error {
+	schema := `
+	CREATE TABLE IF NOT EXISTS posts (
+		id           TEXT PRIMARY KEY,
+		title        TEXT NOT NULL,
+		content      TEXT NOT NULL DEFAULT '',
+		content_html TEXT NOT NULL DEFAULT '',
+		summary      TEXT NOT NULL DEFAULT '',
+		date         TEXT NOT NULL,
+		category     TEXT NOT NULL DEFAULT '',
+		status       TEXT NOT NULL DEFAULT 'draft',
+		encrypted    INTEGER NOT NULL DEFAULT 0,
+		enc_salt     TEXT NOT NULL DEFAULT '',
+		enc_nonce    TEXT NOT NULL DEFAULT '',
+		enc_cipher   TEXT NOT NULL DEFAULT '',
+		created_at   TEXT NOT NULL,
+		updated_at   TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_posts_date ON posts(date DESC);
+	CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);
+
+	CREATE TABLE IF NOT EXISTS tags (
+		name TEXT PRIMARY KEY
+	);
+
+	CREATE TABLE IF NOT EXISTS post_tags (
+		post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+		tag     TEXT NOT NULL REFERENCES tags(name) ON DELETE CASCADE,
+		PRIMARY KEY (post_id, tag)
+	);
+	CREATE INDEX IF NOT EXISTS idx_post_tags_tag ON post_tags(tag);
+
+	CREATE TABLE IF NOT EXISTS admin (
+		username      TEXT PRIMARY KEY,
+		password_hash TEXT NOT NULL,
+		email         TEXT NOT NULL DEFAULT '',
+		verified      INTEGER NOT NULL DEFAULT 0,
+		verify_token  TEXT NOT NULL DEFAULT '',
+		role          TEXT NOT NULL DEFAULT 'user',
+		created_at    TEXT NOT NULL DEFAULT ''
+	);
+
+	CREATE TABLE IF NOT EXISTS settings (
+		id       INTEGER PRIMARY KEY DEFAULT 1,
+		title    TEXT NOT NULL DEFAULT '',
+		subtitle TEXT NOT NULL DEFAULT ''
+	);
+	INSERT OR IGNORE INTO settings (id, title, subtitle) VALUES (1, '', '');
+	`
 	_, err := s.db.ExecContext(ctx, schema)
 	return err
+}
+
+func isDupKeyErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "Error 1061")
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -401,12 +428,12 @@ func (s *Store) MigrateAdminSchema(ctx context.Context) error {
 func (s *Store) UpsertAdmin(ctx context.Context, username, passwordHash string) error {
 	if s.dialect == "mysql" {
 		_, err := s.db.ExecContext(ctx,
-			"INSERT INTO admin (username, password_hash, verified, role, created_at) VALUES (?, ?, 1, 'admin', ?) ON DUPLICATE KEY UPDATE password_hash = ?",
+			"INSERT INTO admin (username, password_hash, verified, verify_token, role, created_at) VALUES (?, ?, 1, '', 'admin', ?) ON DUPLICATE KEY UPDATE password_hash = ?",
 			username, passwordHash, time.Now().Format(time.RFC3339), passwordHash)
 		return err
 	}
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO admin (username, password_hash, verified, role, created_at) VALUES (?, ?, 1, 'admin', ?) ON CONFLICT(username) DO UPDATE SET password_hash = ?",
+		"INSERT INTO admin (username, password_hash, verified, verify_token, role, created_at) VALUES (?, ?, 1, '', 'admin', ?) ON CONFLICT(username) DO UPDATE SET password_hash = ?",
 		username, passwordHash, time.Now().Format(time.RFC3339), passwordHash)
 	return err
 }

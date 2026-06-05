@@ -31,7 +31,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Port:          env("PORT", "8080"),
 		DBType:        env("DB_TYPE", "mysql"),
-		DBDSN:         env("DB_DSN", "root:password@tcp(127.0.0.1:3306)/blog?charset=utf8mb4&parseTime=true&loc=Local"),
+		DBDSN:         env("DB_DSN", "root:password@tcp(127.0.0.1:3306)/blog?charset=utf8mb4&parseTime=true&loc=Local&multiStatements=true"),
 		JWTSecret:     env("JWT_SECRET", ""),
 		AdminUsername: env("ADMIN_USERNAME", "admin"),
 		AdminPassword: env("ADMIN_PASSWORD", ""),
