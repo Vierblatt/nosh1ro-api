@@ -125,7 +125,7 @@ func handleVerify(store *Store) gin.HandlerFunc {
 
 		content, err := decryptContent(p.Encryption, req.Password)
 		if err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			c.JSON(http.StatusForbidden, gin.H{"error": "decryption failed"})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"content": content})
@@ -134,7 +134,7 @@ func handleVerify(store *Store) gin.HandlerFunc {
 
 func handleTags(store *Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tags, err := store.distinctTags(c.Request.Context())
+		tags, err := store.allTags(c.Request.Context())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch tags"})
 			return

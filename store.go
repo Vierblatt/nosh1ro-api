@@ -29,7 +29,7 @@ type Store struct {
 }
 
 func newStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
@@ -40,24 +40,34 @@ func newStore(dbPath string) (*Store, error) {
 func (s *Store) initSchema(ctx context.Context) error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS posts (
-		id          TEXT PRIMARY KEY,
-		title       TEXT NOT NULL,
-		content     TEXT NOT NULL DEFAULT '',
+		id           TEXT PRIMARY KEY,
+		title        TEXT NOT NULL,
+		content      TEXT NOT NULL DEFAULT '',
 		content_html TEXT NOT NULL DEFAULT '',
-		summary     TEXT NOT NULL DEFAULT '',
-		date        TEXT NOT NULL,
-		tags        TEXT NOT NULL DEFAULT '[]',
-		category    TEXT NOT NULL DEFAULT '',
-		status      TEXT NOT NULL DEFAULT 'draft',
-		encrypted   INTEGER NOT NULL DEFAULT 0,
+		summary      TEXT NOT NULL DEFAULT '',
+		date         TEXT NOT NULL,
+		category     TEXT NOT NULL DEFAULT '',
+		status       TEXT NOT NULL DEFAULT 'draft',
+		encrypted    INTEGER NOT NULL DEFAULT 0,
 		enc_salt     TEXT NOT NULL DEFAULT '',
 		enc_nonce    TEXT NOT NULL DEFAULT '',
 		enc_cipher   TEXT NOT NULL DEFAULT '',
-		created_at  TEXT NOT NULL,
-		updated_at  TEXT NOT NULL
+		created_at   TEXT NOT NULL,
+		updated_at   TEXT NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_posts_date ON posts(date DESC);
 	CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);
+
+	CREATE TABLE IF NOT EXISTS tags (
+		name TEXT PRIMARY KEY
+	);
+
+	CREATE TABLE IF NOT EXISTS post_tags (
+		post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+		tag     TEXT NOT NULL REFERENCES tags(name) ON DELETE CASCADE,
+		PRIMARY KEY (post_id, tag)
+	);
+	CREATE INDEX IF NOT EXISTS idx_post_tags_tag ON post_tags(tag);
 
 	CREATE TABLE IF NOT EXISTS admin (
 		username      TEXT PRIMARY KEY,
@@ -77,26 +87,26 @@ func (s *Store) initSchema(ctx context.Context) error {
 
 func (s *Store) close() error { return s.db.Close() }
 
-// Post CRUD
+// --- Post CRUD ---
 
 func (s *Store) findPosts(ctx context.Context, f PostFilter, page, size int64) (*PostListResult, error) {
 	var conditions []string
-	var args []interface{}
+	var args []any
 
 	if f.Status != "" {
-		conditions = append(conditions, "status = ?")
+		conditions = append(conditions, "p.status = ?")
 		args = append(args, f.Status)
 	}
-	if f.Tag != "" {
-		conditions = append(conditions, "tags LIKE ?")
-		args = append(args, `%"`+f.Tag+`"%`)
-	}
 	if f.Category != "" {
-		conditions = append(conditions, "category = ?")
+		conditions = append(conditions, "p.category = ?")
 		args = append(args, f.Category)
 	}
+	if f.Tag != "" {
+		conditions = append(conditions, `p.id IN (SELECT post_id FROM post_tags WHERE tag = ?)`)
+		args = append(args, f.Tag)
+	}
 	if f.Search != "" {
-		conditions = append(conditions, "(title LIKE ? OR content LIKE ?)")
+		conditions = append(conditions, "(p.title LIKE ? OR p.content LIKE ?)")
 		q := "%" + f.Search + "%"
 		args = append(args, q, q)
 	}
@@ -107,31 +117,43 @@ func (s *Store) findPosts(ctx context.Context, f PostFilter, page, size int64) (
 	}
 
 	var total int64
-	countSQL := "SELECT COUNT(*) FROM posts " + where
+	countSQL := "SELECT COUNT(*) FROM posts p " + where
 	if err := s.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("count posts: %w", err)
 	}
 
 	offset := (page - 1) * size
-	selectSQL := "SELECT id, title, content, content_html, summary, date, tags, category, status, encrypted, enc_salt, enc_nonce, enc_cipher, created_at, updated_at FROM posts " + where + " ORDER BY date DESC LIMIT ? OFFSET ?"
+	selectSQL := "SELECT p.id, p.title, p.content, p.content_html, p.summary, p.date, p.category, p.status, p.encrypted, p.enc_salt, p.enc_nonce, p.enc_cipher, p.created_at, p.updated_at FROM posts p " + where + " ORDER BY p.date DESC LIMIT ? OFFSET ?"
 	args = append(args, size, offset)
 
 	rows, err := s.db.QueryContext(ctx, selectSQL, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query posts: %w", err)
 	}
 	defer rows.Close()
 
-	posts, err := scanPosts(rows)
-	if err != nil {
-		return nil, err
+	var postList []Post
+	for rows.Next() {
+		p, err := scanPost(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan post: %w", err)
+		}
+		tags, err := s.postTags(ctx, p.ID)
+		if err != nil {
+			return nil, fmt.Errorf("get tags: %w", err)
+		}
+		p.Tags = tags
+		postList = append(postList, *p)
 	}
-	return &PostListResult{Posts: posts, Total: total, Page: page, Size: size}, nil
+	if postList == nil {
+		postList = []Post{}
+	}
+	return &PostListResult{Posts: postList, Total: total, Page: page, Size: size}, nil
 }
 
 func (s *Store) countPosts(ctx context.Context, f PostFilter) (int64, error) {
 	var conditions []string
-	var args []interface{}
+	var args []any
 	if f.Status != "" {
 		conditions = append(conditions, "status = ?")
 		args = append(args, f.Status)
@@ -147,66 +169,139 @@ func (s *Store) countPosts(ctx context.Context, f PostFilter) (int64, error) {
 
 func (s *Store) findPost(ctx context.Context, id string) (*Post, error) {
 	row := s.db.QueryRowContext(ctx,
-		"SELECT id, title, content, content_html, summary, date, tags, category, status, encrypted, enc_salt, enc_nonce, enc_cipher, created_at, updated_at FROM posts WHERE id = ?", id)
-	return scanPost(row)
+		"SELECT id, title, content, content_html, summary, date, category, status, encrypted, enc_salt, enc_nonce, enc_cipher, created_at, updated_at FROM posts WHERE id = ?", id)
+	p, err := scanPost(row)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := s.postTags(ctx, p.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get tags: %w", err)
+	}
+	p.Tags = tags
+	return p, nil
 }
 
 func (s *Store) insertPost(ctx context.Context, p *Post) error {
-	enc := encryptionFromPost(p)
-	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO posts (id, title, content, content_html, summary, date, tags, category, status, encrypted, enc_salt, enc_nonce, enc_cipher, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-		p.ID, p.Title, p.Content, p.ContentHTML, p.Summary, p.Date, joinTags(p.Tags), p.Category, p.Status, boolToInt(p.Encrypted),
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	enc := p.encryptionData()
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO posts (id, title, content, content_html, summary, date, category, status, encrypted, enc_salt, enc_nonce, enc_cipher, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		p.ID, p.Title, p.Content, p.ContentHTML, p.Summary, p.Date, p.Category, p.Status, boolToInt(p.Encrypted),
 		enc.Salt, enc.Nonce, enc.Ciphertext, p.CreatedAt.Format(time.RFC3339), p.UpdatedAt.Format(time.RFC3339))
-	return err
+	if err != nil {
+		return fmt.Errorf("insert post: %w", err)
+	}
+	if err := s.setPostTagsTx(ctx, tx, p.ID, p.Tags); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) replacePost(ctx context.Context, p *Post) error {
-	enc := encryptionFromPost(p)
-	_, err := s.db.ExecContext(ctx,
-		"UPDATE posts SET title=?, content=?, content_html=?, summary=?, date=?, tags=?, category=?, status=?, encrypted=?, enc_salt=?, enc_nonce=?, enc_cipher=?, updated_at=? WHERE id=?",
-		p.Title, p.Content, p.ContentHTML, p.Summary, p.Date, joinTags(p.Tags), p.Category, p.Status, boolToInt(p.Encrypted),
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	enc := p.encryptionData()
+	_, err = tx.ExecContext(ctx,
+		"UPDATE posts SET title=?, content=?, content_html=?, summary=?, date=?, category=?, status=?, encrypted=?, enc_salt=?, enc_nonce=?, enc_cipher=?, updated_at=? WHERE id=?",
+		p.Title, p.Content, p.ContentHTML, p.Summary, p.Date, p.Category, p.Status, boolToInt(p.Encrypted),
 		enc.Salt, enc.Nonce, enc.Ciphertext, p.UpdatedAt.Format(time.RFC3339), p.ID)
-	return err
+	if err != nil {
+		return fmt.Errorf("update post: %w", err)
+	}
+	if err := s.setPostTagsTx(ctx, tx, p.ID, p.Tags); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) deletePost(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM posts WHERE id = ?", id)
-	return err
+	res, err := s.db.ExecContext(ctx, "DELETE FROM posts WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete post: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) postExists(ctx context.Context, id string) bool {
 	var exists int
-	s.db.QueryRowContext(ctx, "SELECT 1 FROM posts WHERE id = ?", id).Scan(&exists)
-	return exists == 1
+	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM posts WHERE id = ?", id).Scan(&exists)
+	return err == nil && exists == 1
 }
 
-func (s *Store) distinctTags(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT tags FROM posts WHERE status = 'published'")
+// --- Tags ---
+
+func (s *Store) allTags(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT name FROM tags ORDER BY name")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query tags: %w", err)
 	}
 	defer rows.Close()
 
-	tagSet := make(map[string]struct{})
+	var tags []string
 	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
-			continue
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, fmt.Errorf("scan tag: %w", err)
 		}
-		for _, t := range splitTags(raw) {
-			if t != "" {
-				tagSet[t] = struct{}{}
-			}
-		}
-	}
-	tags := make([]string, 0, len(tagSet))
-	for t := range tagSet {
 		tags = append(tags, t)
+	}
+	if tags == nil {
+		tags = []string{}
 	}
 	return tags, nil
 }
 
-// Admin
+func (s *Store) postTags(ctx context.Context, postID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT tag FROM post_tags WHERE post_id = ? ORDER BY tag", postID)
+	if err != nil {
+		return nil, fmt.Errorf("query post tags: %w", err)
+	}
+	defer rows.Close()
+
+	var tags []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, fmt.Errorf("scan tag: %w", err)
+		}
+		tags = append(tags, t)
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	return tags, nil
+}
+
+func (s *Store) setPostTagsTx(ctx context.Context, tx *sql.Tx, postID string, tags []string) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM post_tags WHERE post_id = ?", postID); err != nil {
+		return fmt.Errorf("clear tags: %w", err)
+	}
+	for _, t := range tags {
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO tags (name) VALUES (?)", t); err != nil {
+			return fmt.Errorf("insert tag %q: %w", t, err)
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO post_tags (post_id, tag) VALUES (?, ?)", postID, t); err != nil {
+			return fmt.Errorf("link tag %q: %w", t, err)
+		}
+	}
+	return nil
+}
+
+// --- Admin ---
 
 func (s *Store) upsertAdmin(ctx context.Context, username, passwordHash string) error {
 	_, err := s.db.ExecContext(ctx,
@@ -224,7 +319,7 @@ func (s *Store) findAdmin(ctx context.Context, username string) (*AdminUser, err
 	return &u, nil
 }
 
-// Settings
+// --- Settings ---
 
 func (s *Store) getSettings(ctx context.Context) (*BlogSettings, error) {
 	var bs BlogSettings
@@ -240,22 +335,25 @@ func (s *Store) upsertSettings(ctx context.Context, bs *BlogSettings) error {
 	return err
 }
 
-// Scan helpers
+// --- Scan helpers ---
 
-func scanPost(r *sql.Row) (*Post, error) {
+// scanner abstracts sql.Row and sql.Rows for a shared scanPost helper.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPost(s scanner) (*Post, error) {
 	var p Post
-	var tagsRaw string
 	var encrypted int
 	var encSalt, encNonce, encCipher string
 	var createdAt, updatedAt string
 
-	err := r.Scan(&p.ID, &p.Title, &p.Content, &p.ContentHTML, &p.Summary, &p.Date,
-		&tagsRaw, &p.Category, &p.Status, &encrypted,
+	err := s.Scan(&p.ID, &p.Title, &p.Content, &p.ContentHTML, &p.Summary, &p.Date,
+		&p.Category, &p.Status, &encrypted,
 		&encSalt, &encNonce, &encCipher, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
-	p.Tags = splitTags(tagsRaw)
 	p.Encrypted = encrypted != 0
 	if p.Encrypted {
 		p.Encryption = &EncryptionData{Salt: encSalt, Nonce: encNonce, Ciphertext: encCipher}
@@ -265,67 +363,7 @@ func scanPost(r *sql.Row) (*Post, error) {
 	return &p, nil
 }
 
-func scanPosts(rows *sql.Rows) ([]Post, error) {
-	var posts []Post
-	for rows.Next() {
-		var p Post
-		var tagsRaw string
-		var encrypted int
-		var encSalt, encNonce, encCipher string
-		var createdAt, updatedAt string
-
-		if err := rows.Scan(&p.ID, &p.Title, &p.Content, &p.ContentHTML, &p.Summary, &p.Date,
-			&tagsRaw, &p.Category, &p.Status, &encrypted,
-			&encSalt, &encNonce, &encCipher, &createdAt, &updatedAt); err != nil {
-			return nil, err
-		}
-		p.Tags = splitTags(tagsRaw)
-		p.Encrypted = encrypted != 0
-		if p.Encrypted {
-			p.Encryption = &EncryptionData{Salt: encSalt, Nonce: encNonce, Ciphertext: encCipher}
-		}
-		p.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
-		posts = append(posts, p)
-	}
-	if posts == nil {
-		posts = []Post{}
-	}
-	return posts, nil
-}
-
-// Helpers
-
-func joinTags(tags []string) string {
-	// JSON array format stored as text for LIKE queries
-	sb := strings.Builder{}
-	sb.WriteString("[")
-	for i, t := range tags {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		sb.WriteString(`"` + t + `"`)
-	}
-	sb.WriteString("]")
-	return sb.String()
-}
-
-func splitTags(raw string) []string {
-	raw = strings.Trim(raw, "[]")
-	if raw == "" {
-		return []string{}
-	}
-	parts := strings.Split(raw, ",")
-	tags := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		p = strings.Trim(p, `"`)
-		if p != "" {
-			tags = append(tags, p)
-		}
-	}
-	return tags
-}
+// --- Helpers ---
 
 func boolToInt(b bool) int {
 	if b {
@@ -334,7 +372,7 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-func encryptionFromPost(p *Post) EncryptionData {
+func (p *Post) encryptionData() EncryptionData {
 	if p.Encryption != nil {
 		return *p.Encryption
 	}
