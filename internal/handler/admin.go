@@ -56,6 +56,10 @@ func (ac *AdminController) handleLogin(c *gin.Context) {
 		respondError(c, ErrUnauthorized)
 		return
 	}
+	if !u.Verified {
+		respondError(c, ErrNotVerified)
+		return
+	}
 
 	token, err := auth.GenerateToken(ac.secret, req.Username)
 	if err != nil {

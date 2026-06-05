@@ -58,7 +58,11 @@ func (s *Store) InitSchema(ctx context.Context) error {
 
 	CREATE TABLE IF NOT EXISTS admin (
 		username      TEXT PRIMARY KEY,
-		password_hash TEXT NOT NULL
+		password_hash TEXT NOT NULL,
+		email         TEXT NOT NULL DEFAULT '',
+		verified      INTEGER NOT NULL DEFAULT 0,
+		verify_token  TEXT NOT NULL DEFAULT '',
+		created_at    TEXT NOT NULL DEFAULT ''
 	);
 
 	CREATE TABLE IF NOT EXISTS settings (
@@ -264,20 +268,110 @@ func (s *Store) AllTags(ctx context.Context) ([]string, error) {
 
 // --- Admin ---
 
+func (s *Store) MigrateAdminSchema(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info(admin)")
+	if err != nil {
+		return fmt.Errorf("pragma table_info: %w", err)
+	}
+	defer rows.Close()
+
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan pragma: %w", err)
+		}
+		existing[name] = true
+	}
+
+	newCols := []struct{ name, def string }{
+		{"email", "TEXT NOT NULL DEFAULT ''"},
+		{"verified", "INTEGER NOT NULL DEFAULT 0"},
+		{"verify_token", "TEXT NOT NULL DEFAULT ''"},
+		{"created_at", "TEXT NOT NULL DEFAULT ''"},
+	}
+
+	for _, col := range newCols {
+		if !existing[col.name] {
+			_, err := s.db.ExecContext(ctx, "ALTER TABLE admin ADD COLUMN "+col.name+" "+col.def)
+			if err != nil {
+				return fmt.Errorf("add column %s: %w", col.name, err)
+			}
+		}
+	}
+
+	_, err = s.db.ExecContext(ctx, "UPDATE admin SET verified = 1 WHERE verified = 0 AND username != ''")
+	return err
+}
+
 func (s *Store) UpsertAdmin(ctx context.Context, username, passwordHash string) error {
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO admin (username, password_hash) VALUES (?, ?) ON CONFLICT(username) DO UPDATE SET password_hash = ?",
-		username, passwordHash, passwordHash)
+		"INSERT INTO admin (username, password_hash, verified, created_at) VALUES (?, ?, 1, ?) ON CONFLICT(username) DO UPDATE SET password_hash = ?",
+		username, passwordHash, time.Now().Format(time.RFC3339), passwordHash)
 	return err
 }
 
 func (s *Store) FindAdmin(ctx context.Context, username string) (*model.AdminUser, error) {
 	var u model.AdminUser
-	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash FROM admin WHERE username = ?", username).Scan(&u.Username, &u.PasswordHash)
+	var createdAt string
+	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash, email, verified, verify_token, created_at FROM admin WHERE username = ?", username).
+		Scan(&u.Username, &u.PasswordHash, &u.Email, &u.Verified, &u.VerifyToken, &createdAt)
 	if err != nil {
 		return nil, err
 	}
+	u.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	return &u, nil
+}
+
+func (s *Store) FindAdminByEmail(ctx context.Context, email string) (*model.AdminUser, error) {
+	var u model.AdminUser
+	var createdAt string
+	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash, email, verified, verify_token, created_at FROM admin WHERE email = ?", email).
+		Scan(&u.Username, &u.PasswordHash, &u.Email, &u.Verified, &u.VerifyToken, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	u.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	return &u, nil
+}
+
+func (s *Store) FindAdminByVerifyToken(ctx context.Context, token string) (*model.AdminUser, error) {
+	var u model.AdminUser
+	var createdAt string
+	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash, email, verified, verify_token, created_at FROM admin WHERE verify_token = ?", token).
+		Scan(&u.Username, &u.PasswordHash, &u.Email, &u.Verified, &u.VerifyToken, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	u.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	return &u, nil
+}
+
+func (s *Store) CountAdmins(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM admin").Scan(&count)
+	return count, err
+}
+
+func (s *Store) CreateAdmin(ctx context.Context, u *model.AdminUser) error {
+	_, err := s.db.ExecContext(ctx,
+		"INSERT INTO admin (username, password_hash, email, verified, verify_token, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		u.Username, u.PasswordHash, u.Email, boolToInt(u.Verified), u.VerifyToken, u.CreatedAt.Format(time.RFC3339))
+	return err
+}
+
+func (s *Store) MarkVerified(ctx context.Context, username string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE admin SET verified = 1, verify_token = '' WHERE username = ?", username)
+	return err
+}
+
+func (s *Store) SetVerifyToken(ctx context.Context, username, token string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE admin SET verify_token = ? WHERE username = ?", token, username)
+	return err
 }
 
 // --- Settings ---

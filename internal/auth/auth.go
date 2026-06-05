@@ -3,6 +3,7 @@ package auth
 import (
 	"fmt"
 	"time"
+	"unicode"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -10,14 +11,24 @@ import (
 
 type Claims struct {
 	Username string `json:"username"`
+	Purpose  string `json:"purpose,omitempty"`
 	jwt.RegisteredClaims
 }
 
 func GenerateToken(secret, username string) (string, error) {
+	return generateToken(secret, username, "auth", 72*time.Hour)
+}
+
+func GenerateVerificationToken(secret, username string) (string, error) {
+	return generateToken(secret, username, "verify", 24*time.Hour)
+}
+
+func generateToken(secret, username, purpose string, ttl time.Duration) (string, error) {
 	claims := Claims{
 		Username: username,
+		Purpose:  purpose,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(72 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
@@ -50,4 +61,23 @@ func HashPassword(pw string) (string, error) {
 
 func CheckPassword(hash, pw string) error {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pw))
+}
+
+func ValidatePassword(pw string) error {
+	if len(pw) < 8 {
+		return fmt.Errorf("密码至少需要8个字符")
+	}
+	var hasLetter, hasDigit bool
+	for _, c := range pw {
+		if unicode.IsLetter(c) {
+			hasLetter = true
+		}
+		if unicode.IsDigit(c) {
+			hasDigit = true
+		}
+	}
+	if !hasLetter || !hasDigit {
+		return fmt.Errorf("密码必须包含字母和数字")
+	}
+	return nil
 }

@@ -14,6 +14,12 @@ type Config struct {
 	AdminPassword string
 	BlogTitle     string
 	BlogSubtitle  string
+	SMTPHost      string
+	SMTPPort      string
+	SMTPUsername  string
+	SMTPPassword  string
+	SMTPFrom      string
+	BaseURL       string
 }
 
 func Load() (*Config, error) {
@@ -25,6 +31,12 @@ func Load() (*Config, error) {
 		AdminPassword: env("ADMIN_PASSWORD", ""),
 		BlogTitle:     env("BLOG_TITLE", "nosh1ro"),
 		BlogSubtitle:  env("BLOG_SUBTITLE", ""),
+		SMTPHost:      env("SMTP_HOST", ""),
+		SMTPPort:      env("SMTP_PORT", "587"),
+		SMTPUsername:  env("SMTP_USERNAME", ""),
+		SMTPPassword:  env("SMTP_PASSWORD", ""),
+		SMTPFrom:      env("SMTP_FROM", ""),
+		BaseURL:       env("BASE_URL", "https://nosh1ro.top"),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err

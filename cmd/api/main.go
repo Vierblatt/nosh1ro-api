@@ -11,6 +11,7 @@ import (
 
 	"github.com/Vierblatt/nosh1ro-api/internal/auth"
 	"github.com/Vierblatt/nosh1ro-api/internal/config"
+	"github.com/Vierblatt/nosh1ro-api/internal/email"
 	"github.com/Vierblatt/nosh1ro-api/internal/handler"
 	"github.com/Vierblatt/nosh1ro-api/internal/middleware"
 	"github.com/Vierblatt/nosh1ro-api/internal/seed"
@@ -39,6 +40,10 @@ func main() {
 		slog.Error("schema", "error", err)
 		os.Exit(1)
 	}
+	if err := db.MigrateAdminSchema(context.Background()); err != nil {
+		slog.Error("admin migration", "error", err)
+		os.Exit(1)
+	}
 
 	hash, err := auth.HashPassword(cfg.AdminPassword)
 	if err != nil {
@@ -63,6 +68,18 @@ func main() {
 
 	postCtrl := handler.NewPostController(db)
 	postCtrl.Register(r.Group("/api"))
+
+	emailCfg := &email.Config{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUsername,
+		Password: cfg.SMTPPassword,
+		From:     cfg.SMTPFrom,
+		BaseURL:  cfg.BaseURL,
+	}
+
+	authCtrl := handler.NewAuthController(db, cfg.JWTSecret, emailCfg)
+	authCtrl.Register(r.Group("/api"))
 
 	adminCtrl := handler.NewAdminController(db, db, cfg.JWTSecret)
 	adminGroup := r.Group("/api/admin")

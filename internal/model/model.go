@@ -44,8 +44,12 @@ func (p *Post) EncryptionData() EncryptionData {
 }
 
 type AdminUser struct {
-	Username     string
-	PasswordHash string
+	Username         string
+	PasswordHash     string
+	Email            string
+	Verified         bool
+	VerifyToken      string
+	CreatedAt        time.Time
 }
 
 type BlogSettings struct {

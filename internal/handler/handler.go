@@ -22,7 +22,13 @@ type PostStore interface {
 
 type AdminStore interface {
 	FindAdmin(ctx context.Context, username string) (*model.AdminUser, error)
+	FindAdminByEmail(ctx context.Context, email string) (*model.AdminUser, error)
+	FindAdminByVerifyToken(ctx context.Context, token string) (*model.AdminUser, error)
 	UpsertAdmin(ctx context.Context, username, passwordHash string) error
+	CreateAdmin(ctx context.Context, u *model.AdminUser) error
+	CountAdmins(ctx context.Context) (int64, error)
+	MarkVerified(ctx context.Context, username string) error
+	SetVerifyToken(ctx context.Context, username, token string) error
 	GetSettings(ctx context.Context) (*model.BlogSettings, error)
 	UpsertSettings(ctx context.Context, bs *model.BlogSettings) error
 }
@@ -44,6 +50,12 @@ var (
 	ErrBadRequest    = &AppError{Code: "BAD_REQUEST", Message: "invalid request", Status: 400}
 	ErrInternal      = &AppError{Code: "INTERNAL", Message: "internal server error", Status: 500}
 	ErrTooManyReqs   = &AppError{Code: "RATE_LIMITED", Message: "rate limit exceeded", Status: 429}
+	ErrNotVerified   = &AppError{Code: "NOT_VERIFIED", Message: "email not verified", Status: 403}
+	ErrEmailExists   = &AppError{Code: "EMAIL_EXISTS", Message: "email already registered", Status: 409}
+	ErrUserExists    = &AppError{Code: "USER_EXISTS", Message: "username already taken", Status: 409}
+	ErrWeakPassword  = &AppError{Code: "WEAK_PASSWORD", Message: "password too weak", Status: 400}
+	ErrInvalidToken  = &AppError{Code: "INVALID_TOKEN", Message: "invalid or expired token", Status: 400}
+	ErrUserLimit     = &AppError{Code: "USER_LIMIT", Message: "registration closed: user limit reached", Status: 403}
 )
 
 func respondError(c *gin.Context, err *AppError) {
