@@ -2,7 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 func setupTestStore(t *testing.T) *Store {
@@ -53,6 +60,7 @@ func setupRouter(store *Store, cfg Config) *gin.Engine {
 		api.GET("/health", handleHealth)
 		api.GET("/posts", handlePosts(store))
 		api.GET("/posts/:id", handlePostDetail(store))
+		api.POST("/posts/:id/verify", handleVerify(store))
 		api.GET("/tags", handleTags(store))
 		api.GET("/feed.xml", handleFeed(store, cfg))
 	}
@@ -165,7 +173,7 @@ func TestHandlePostDetail(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	var body map[string]interface{}
+	var body map[string]any
 	json.Unmarshal(w.Body.Bytes(), &body)
 	if body["id"] != "post-1" {
 		t.Errorf("id = %v", body["id"])
@@ -357,6 +365,179 @@ func TestHandleAdminCRUD(t *testing.T) {
 			t.Fatalf("delete status = %d", w.Code)
 		}
 	})
+}
+
+func TestHandleVerify(t *testing.T) {
+	store := setupTestStore(t)
+	seedTestPosts(t, store)
+
+	// Insert a test encrypted post with known password
+	salt := make([]byte, 16)
+	nonce := make([]byte, 12)
+	io.ReadFull(rand.Reader, salt)
+	io.ReadFull(rand.Reader, nonce)
+	password := "test-password"
+	key := pbkdf2.Key([]byte(password), salt, 100000, 32, sha256.New)
+	block, _ := aes.NewCipher(key)
+	gcm, _ := cipher.NewGCM(block)
+	ciphertext := gcm.Seal(nil, nonce, []byte("secret content"), nil)
+
+	encPost := &Post{
+		ID: "enc-1", Title: "Enc Post", Date: "2026-06-01", Status: "published",
+		Content: "", ContentHTML: "", Summary: "encrypted",
+		Encrypted: true,
+		Encryption: &EncryptionData{
+			Salt:       base64.StdEncoding.EncodeToString(salt),
+			Nonce:      base64.StdEncoding.EncodeToString(nonce),
+			Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
+		},
+		Tags:      []string{"secret"},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := store.insertPost(context.Background(), encPost); err != nil {
+		t.Fatalf("insert encrypted post: %v", err)
+	}
+
+	r := setupRouter(store, Config{})
+
+	t.Run("correct password", func(t *testing.T) {
+		body := `{"password":"test-password"}`
+		req := httptest.NewRequest("POST", "/api/posts/enc-1/verify", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+		}
+		var resp map[string]string
+		json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["content"] != "secret content" {
+			t.Errorf("content = %q, want %q", resp["content"], "secret content")
+		}
+	})
+
+	t.Run("wrong password", func(t *testing.T) {
+		body := `{"password":"wrong"}`
+		req := httptest.NewRequest("POST", "/api/posts/enc-1/verify", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusForbidden)
+		}
+	})
+
+	t.Run("not encrypted", func(t *testing.T) {
+		body := `{"password":"pw"}`
+		req := httptest.NewRequest("POST", "/api/posts/post-1/verify", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		body := `{"password":"pw"}`
+		req := httptest.NewRequest("POST", "/api/posts/nonexistent/verify", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+		}
+	})
+
+	t.Run("empty password", func(t *testing.T) {
+		body := `{}`
+		req := httptest.NewRequest("POST", "/api/posts/enc-1/verify", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+		}
+	})
+}
+
+func TestRateLimiter(t *testing.T) {
+	rl := newRateLimiter(10, 5)
+
+	// Burst of 5 should allow exactly 5 requests
+	key := "test-ip"
+	for i := range 5 {
+		if !rl.allow(key) {
+			t.Errorf("request %d should be allowed", i+1)
+		}
+	}
+	// 6th should be denied
+	if rl.allow(key) {
+		t.Error("6th request should be denied after burst exhausted")
+	}
+}
+
+func TestRateLimiter_Refill(t *testing.T) {
+	rl := &rateLimiter{
+		buckets: make(map[string]*bucket),
+		rate:    100, // 100 tokens per second
+		burst:   10,
+	}
+	key := "test-ip"
+
+	// Exhaust the burst
+	for range 10 {
+		rl.allow(key)
+	}
+	if rl.allow(key) {
+		t.Error("should be empty after burst exhausted")
+	}
+
+	// Simulate refill by setting lastTime far in the past
+	rl.mu.Lock()
+	b := rl.buckets[key]
+	b.lastTime = time.Now().Add(-1 * time.Second)
+	rl.mu.Unlock()
+
+	// After 1 second at 100 rps, bucket should have refilled
+	if !rl.allow(key) {
+		t.Error("should allow after refill period")
+	}
+}
+
+func TestRateLimiterMiddleware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(rateLimitMiddleware(100, 3))
+
+	var hits int
+	r.GET("/test", func(c *gin.Context) {
+		hits++
+		c.Status(http.StatusOK)
+	})
+
+	// First 3 should pass
+	for i := range 3 {
+		req := httptest.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("request %d: status = %d", i+1, w.Code)
+		}
+	}
+
+	// 4th should be rate limited
+	req := httptest.NewRequest("GET", "/test", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("rate limited status = %d, want %d", w.Code, http.StatusTooManyRequests)
+	}
+	if hits != 3 {
+		t.Errorf("hits = %d, want 3", hits)
+	}
 }
 
 func setupAdminRouter(store *Store, cfg Config) *gin.Engine {
