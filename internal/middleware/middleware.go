@@ -1,15 +1,18 @@
-package main
+package middleware
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Vierblatt/nosh1ro-api/internal/auth"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
-func corsMiddleware() gin.HandlerFunc {
+func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "https://nosh1ro.top")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -22,7 +25,7 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
-func authMiddleware(secret string) gin.HandlerFunc {
+func Auth(secret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if header == "" || !strings.HasPrefix(header, "Bearer ") {
@@ -30,12 +33,24 @@ func authMiddleware(secret string) gin.HandlerFunc {
 			return
 		}
 		tokenStr := strings.TrimPrefix(header, "Bearer ")
-		claims, err := validateToken(secret, tokenStr)
+		claims, err := auth.ValidateToken(secret, tokenStr)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
 		c.Set("admin_user", claims.Username)
+		c.Next()
+	}
+}
+
+func RequestID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.GetHeader("X-Request-ID")
+		if id == "" {
+			id = uuid.New().String()
+		}
+		c.Set("request_id", id)
+		c.Header("X-Request-ID", id)
 		c.Next()
 	}
 }
@@ -52,7 +67,7 @@ type bucket struct {
 	lastTime time.Time
 }
 
-func newRateLimiter(rps float64, burst int) *rateLimiter {
+func NewRateLimiter(rps float64, burst int) *rateLimiter {
 	return &rateLimiter{
 		buckets: make(map[string]*bucket),
 		rate:    rps,
@@ -60,7 +75,7 @@ func newRateLimiter(rps float64, burst int) *rateLimiter {
 	}
 }
 
-func (rl *rateLimiter) allow(key string) bool {
+func (rl *rateLimiter) Allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
@@ -85,14 +100,30 @@ func (rl *rateLimiter) allow(key string) bool {
 	return true
 }
 
-func rateLimitMiddleware(rps float64, burst int) gin.HandlerFunc {
-	rl := newRateLimiter(rps, burst)
+func RateLimit(rps float64, burst int) gin.HandlerFunc {
+	rl := NewRateLimiter(rps, burst)
 	return func(c *gin.Context) {
 		key := c.ClientIP()
-		if !rl.allow(key) {
+		if !rl.Allow(key) {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "rate limit exceeded"})
 			return
 		}
 		c.Next()
+	}
+}
+
+func SlogLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		c.Next()
+
+		slog.Info("http",
+			"method", c.Request.Method,
+			"path", path,
+			"status", c.Writer.Status(),
+			"latency", time.Since(start).String(),
+			"ip", c.ClientIP(),
+		)
 	}
 }

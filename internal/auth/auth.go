@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"fmt"
@@ -13,7 +13,7 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func generateToken(secret, username string) (string, error) {
+func GenerateToken(secret, username string) (string, error) {
 	claims := Claims{
 		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -25,7 +25,7 @@ func generateToken(secret, username string) (string, error) {
 	return token.SignedString([]byte(secret))
 }
 
-func validateToken(secret, tokenStr string) (*Claims, error) {
+func ValidateToken(secret, tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{},
 		func(t *jwt.Token) (interface{}, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -43,11 +43,11 @@ func validateToken(secret, tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
-func hashPassword(pw string) (string, error) {
+func HashPassword(pw string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
 	return string(bytes), err
 }
 
-func checkPassword(hash, pw string) error {
+func CheckPassword(hash, pw string) error {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pw))
 }

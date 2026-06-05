@@ -1,4 +1,4 @@
-package main
+package markdown
 
 import (
 	"bytes"
@@ -33,7 +33,7 @@ func init() {
 	)
 }
 
-func renderMarkdown(content string) string {
+func Render(content string) string {
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(content), &buf); err != nil {
 		return content
@@ -43,7 +43,7 @@ func renderMarkdown(content string) string {
 
 var stripHTML = regexp.MustCompile(`<[^>]*>`)
 
-func extractSummary(html string, maxLen int) string {
+func ExtractSummary(html string, maxLen int) string {
 	plain := stripHTML.ReplaceAllString(html, "")
 	runes := []rune(plain)
 	if len(runes) <= maxLen {

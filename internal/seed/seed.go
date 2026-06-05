@@ -1,13 +1,18 @@
-package main
+package seed
 
 import (
 	"context"
 	"time"
+
+	"github.com/Vierblatt/nosh1ro-api/internal/crypto"
+	"github.com/Vierblatt/nosh1ro-api/internal/markdown"
+	"github.com/Vierblatt/nosh1ro-api/internal/model"
+	"github.com/Vierblatt/nosh1ro-api/internal/store"
 )
 
-func seedPosts(store *Store) error {
+func Posts(store *store.Store) error {
 	ctx := context.Background()
-	count, err := store.countPosts(ctx, PostFilter{})
+	count, err := store.CountPosts(ctx, model.PostFilter{})
 	if err != nil {
 		return err
 	}
@@ -17,53 +22,53 @@ func seedPosts(store *Store) error {
 
 	now := time.Now()
 	type seedPost struct {
-		post     Post
+		post     model.Post
 		markdown string
 	}
 
 	posts := []seedPost{
 		{
-			post: Post{ID: "fullstack-review", Title: "从零搭建零端口暴露的个人博客：全链路踩坑复盘", Date: "2026-06-04", Status: "published", Category: "技术",
+			post: model.Post{ID: "fullstack-review", Title: "从零搭建零端口暴露的个人博客：全链路踩坑复盘", Date: "2026-06-04", Status: "published", Category: "技术",
 				Tags: []string{"DevOps", "安全", "Cloudflare", "Nginx", "网络"},
 			},
 			markdown: fullstackReviewMD,
 		},
 		{
-			post: Post{ID: "go-plan", Title: "Go 学习路线图", Date: "2026-06-03", Status: "published", Category: "编程",
+			post: model.Post{ID: "go-plan", Title: "Go 学习路线图", Date: "2026-06-03", Status: "published", Category: "编程",
 				Tags: []string{"Go"},
 				Encrypted: true,
-				Encryption: &EncryptionData{
-					Salt: loadEncryptionJSONField("go-plan-encryption.json", "salt"),
-					Nonce: loadEncryptionJSONField("go-plan-encryption.json", "nonce"),
-					Ciphertext: loadEncryptionJSONField("go-plan-encryption.json", "ciphertext"),
+				Encryption: &model.EncryptionData{
+					Salt: crypto.LoadEncryptionJSONField("go-plan-encryption.json", "salt"),
+					Nonce: crypto.LoadEncryptionJSONField("go-plan-encryption.json", "nonce"),
+					Ciphertext: crypto.LoadEncryptionJSONField("go-plan-encryption.json", "ciphertext"),
 				},
 			},
 		},
 		{
-			post: Post{ID: "cloudflare", Title: "上了 Cloudflare，顺便修了个 HTTPS 的坑", Date: "2026-06-03", Status: "published", Category: "技术",
+			post: model.Post{ID: "cloudflare", Title: "上了 Cloudflare，顺便修了个 HTTPS 的坑", Date: "2026-06-03", Status: "published", Category: "技术",
 				Tags: []string{"Cloudflare", "HTTPS", "前端"},
 			},
 			markdown: cloudflareMD,
 		},
 		{
-			post: Post{ID: "blog-deploy", Title: "博客部署：从 DNS 到安全加固的完整链路", Date: "2026-06-02", Status: "published", Category: "DevOps",
+			post: model.Post{ID: "blog-deploy", Title: "博客部署：从 DNS 到安全加固的完整链路", Date: "2026-06-02", Status: "published", Category: "DevOps",
 				Tags: []string{"Nginx", "部署", "安全"},
 				Encrypted: true,
-				Encryption: &EncryptionData{
-					Salt: loadEncryptionJSONField("encryption.json", "salt"),
-					Nonce: loadEncryptionJSONField("encryption.json", "nonce"),
-					Ciphertext: loadEncryptionJSONField("encryption.json", "ciphertext"),
+				Encryption: &model.EncryptionData{
+					Salt: crypto.LoadEncryptionJSONField("encryption.json", "salt"),
+					Nonce: crypto.LoadEncryptionJSONField("encryption.json", "nonce"),
+					Ciphertext: crypto.LoadEncryptionJSONField("encryption.json", "ciphertext"),
 				},
 			},
 		},
 		{
-			post: Post{ID: "domain-up", Title: "域名上线", Date: "2026-06-02", Status: "published", Category: "杂谈",
+			post: model.Post{ID: "domain-up", Title: "域名上线", Date: "2026-06-02", Status: "published", Category: "杂谈",
 				Tags: []string{"域名"},
 			},
 			markdown: domainUpMD,
 		},
 		{
-			post: Post{ID: "frp-tunnel", Title: "路由器 FRP 穿透", Date: "2026-06-01", Status: "published", Category: "网络",
+			post: model.Post{ID: "frp-tunnel", Title: "路由器 FRP 穿透", Date: "2026-06-01", Status: "published", Category: "网络",
 				Tags: []string{"FRP", "路由器", "网络"},
 			},
 			markdown: frpTunnelMD,
@@ -74,11 +79,11 @@ func seedPosts(store *Store) error {
 		p := sp.post
 		md := sp.markdown
 		p.Content = md
-		p.ContentHTML = renderMarkdown(md)
-		p.Summary = extractSummary(p.ContentHTML, 200)
+		p.ContentHTML = markdown.Render(md)
+		p.Summary = markdown.ExtractSummary(p.ContentHTML, 200)
 		p.CreatedAt = now
 		p.UpdatedAt = now
-		if err := store.insertPost(ctx, &p); err != nil {
+		if err := store.InsertPost(ctx, &p); err != nil {
 			return err
 		}
 	}

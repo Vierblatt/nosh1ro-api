@@ -1,6 +1,18 @@
-package main
+package model
 
 import "time"
+
+// PostStatus represents the publication status of a post.
+type PostStatus string
+
+const (
+	StatusDraft     PostStatus = "draft"
+	StatusPublished PostStatus = "published"
+)
+
+func (s PostStatus) IsValid() bool {
+	return s == StatusDraft || s == StatusPublished
+}
 
 type EncryptionData struct {
 	Salt       string `json:"salt"`
@@ -24,6 +36,13 @@ type Post struct {
 	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
+func (p *Post) EncryptionData() EncryptionData {
+	if p.Encryption != nil {
+		return *p.Encryption
+	}
+	return EncryptionData{}
+}
+
 type AdminUser struct {
 	Username     string
 	PasswordHash string
@@ -32,4 +51,18 @@ type AdminUser struct {
 type BlogSettings struct {
 	Title    string `json:"title"`
 	Subtitle string `json:"subtitle"`
+}
+
+type PostFilter struct {
+	Status   string
+	Tag      string
+	Category string
+	Search   string
+}
+
+type PostListResult struct {
+	Posts []Post `json:"posts"`
+	Total int64  `json:"total"`
+	Page  int64  `json:"page"`
+	Size  int64  `json:"size"`
 }

@@ -1,11 +1,11 @@
-package main
+package auth
 
 import (
 	"testing"
 )
 
 func TestHashAndCheckPassword(t *testing.T) {
-	hash, err := hashPassword("correct-horse-battery-staple")
+	hash, err := HashPassword("correct-horse-battery-staple")
 	if err != nil {
 		t.Fatalf("hashPassword: %v", err)
 	}
@@ -16,17 +16,17 @@ func TestHashAndCheckPassword(t *testing.T) {
 		t.Fatal("hash should not equal plaintext")
 	}
 
-	if err := checkPassword(hash, "correct-horse-battery-staple"); err != nil {
+	if err := CheckPassword(hash, "correct-horse-battery-staple"); err != nil {
 		t.Errorf("checkPassword correct: %v", err)
 	}
-	if err := checkPassword(hash, "wrong-password"); err == nil {
+	if err := CheckPassword(hash, "wrong-password"); err == nil {
 		t.Error("checkPassword should reject wrong password")
 	}
 }
 
 func TestHashPasswordDeterministic(t *testing.T) {
-	h1, _ := hashPassword("same")
-	h2, _ := hashPassword("same")
+	h1, _ := HashPassword("same")
+	h2, _ := HashPassword("same")
 	if h1 == h2 {
 		t.Fatal("bcrypt hashes should include unique salt, got identical hashes")
 	}
@@ -34,7 +34,7 @@ func TestHashPasswordDeterministic(t *testing.T) {
 
 func TestGenerateAndValidateToken(t *testing.T) {
 	secret := "test-secret"
-	token, err := generateToken(secret, "admin")
+	token, err := GenerateToken(secret, "admin")
 	if err != nil {
 		t.Fatalf("generateToken: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestGenerateAndValidateToken(t *testing.T) {
 		t.Fatal("expected non-empty token")
 	}
 
-	claims, err := validateToken(secret, token)
+	claims, err := ValidateToken(secret, token)
 	if err != nil {
 		t.Fatalf("validateToken: %v", err)
 	}
@@ -52,8 +52,8 @@ func TestGenerateAndValidateToken(t *testing.T) {
 }
 
 func TestValidateToken_WrongSecret(t *testing.T) {
-	token, _ := generateToken("good-secret", "admin")
-	_, err := validateToken("wrong-secret", token)
+	token, _ := GenerateToken("good-secret", "admin")
+	_, err := ValidateToken("wrong-secret", token)
 	if err == nil {
 		t.Error("validateToken should fail with wrong secret")
 	}
@@ -61,9 +61,9 @@ func TestValidateToken_WrongSecret(t *testing.T) {
 
 func TestValidateToken_Tampered(t *testing.T) {
 	secret := "secret"
-	token, _ := generateToken(secret, "admin")
+	token, _ := GenerateToken(secret, "admin")
 	tampered := token + "x"
-	_, err := validateToken(secret, tampered)
+	_, err := ValidateToken(secret, tampered)
 	if err == nil {
 		t.Error("validateToken should fail with tampered token")
 	}

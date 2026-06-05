@@ -1,4 +1,4 @@
-package main
+package crypto
 
 import (
 	"crypto/aes"
@@ -9,10 +9,11 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Vierblatt/nosh1ro-api/internal/model"
 	"golang.org/x/crypto/pbkdf2"
 )
 
-func decryptContent(enc *EncryptionData, password string) (string, error) {
+func DecryptContent(enc *model.EncryptionData, password string) (string, error) {
 	salt, err := base64.StdEncoding.DecodeString(enc.Salt)
 	if err != nil {
 		return "", fmt.Errorf("invalid salt: %w", err)
@@ -43,7 +44,7 @@ func decryptContent(enc *EncryptionData, password string) (string, error) {
 	return string(plain), nil
 }
 
-func loadEncryptionJSONField(path, field string) string {
+func LoadEncryptionJSONField(path, field string) string {
 	var m map[string]string
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -1,6 +1,10 @@
-package main
+package config
 
-import "os"
+import (
+	"fmt"
+	"os"
+	"strings"
+)
 
 type Config struct {
 	Port          string
@@ -12,23 +16,34 @@ type Config struct {
 	BlogSubtitle  string
 }
 
-func loadConfig() Config {
-	cfg := Config{
+func Load() (*Config, error) {
+	cfg := &Config{
 		Port:          env("PORT", "8080"),
-		DBPath:        env("DB_PATH", "/opt/blog-api/blog.db"),
+		DBPath:        env("DB_PATH", "blog.db"),
 		JWTSecret:     env("JWT_SECRET", ""),
 		AdminUsername: env("ADMIN_USERNAME", "admin"),
 		AdminPassword: env("ADMIN_PASSWORD", ""),
 		BlogTitle:     env("BLOG_TITLE", "nosh1ro"),
 		BlogSubtitle:  env("BLOG_SUBTITLE", ""),
 	}
-	if cfg.JWTSecret == "" {
-		panic("JWT_SECRET environment variable is required")
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
-	if cfg.AdminPassword == "" {
-		panic("ADMIN_PASSWORD environment variable is required")
+	return cfg, nil
+}
+
+func (c *Config) Validate() error {
+	var missing []string
+	if c.JWTSecret == "" {
+		missing = append(missing, "JWT_SECRET")
 	}
-	return cfg
+	if c.AdminPassword == "" {
+		missing = append(missing, "ADMIN_PASSWORD")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("required env vars not set: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func env(key, def string) string {

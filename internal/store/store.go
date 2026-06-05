@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"context"
@@ -7,28 +7,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Vierblatt/nosh1ro-api/internal/model"
 	_ "modernc.org/sqlite"
 )
-
-type PostFilter struct {
-	Status   string
-	Tag      string
-	Category string
-	Search   string
-}
-
-type PostListResult struct {
-	Posts []Post `json:"posts"`
-	Total int64  `json:"total"`
-	Page  int64  `json:"page"`
-	Size  int64  `json:"size"`
-}
 
 type Store struct {
 	db *sql.DB
 }
 
-func newStore(dbPath string) (*Store, error) {
+func New(dbPath string) (*Store, error) {
 	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
@@ -37,7 +24,7 @@ func newStore(dbPath string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func (s *Store) initSchema(ctx context.Context) error {
+func (s *Store) InitSchema(ctx context.Context) error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS posts (
 		id           TEXT PRIMARY KEY,
@@ -85,11 +72,15 @@ func (s *Store) initSchema(ctx context.Context) error {
 	return err
 }
 
-func (s *Store) close() error { return s.db.Close() }
+func (s *Store) Close() error { return s.db.Close() }
+
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
 
 // --- Post CRUD ---
 
-func (s *Store) findPosts(ctx context.Context, f PostFilter, page, size int64) (*PostListResult, error) {
+func (s *Store) FindPosts(ctx context.Context, f model.PostFilter, page, size int64) (*model.PostListResult, error) {
 	var conditions []string
 	var args []any
 
@@ -132,7 +123,7 @@ func (s *Store) findPosts(ctx context.Context, f PostFilter, page, size int64) (
 	}
 	defer rows.Close()
 
-	var posts []Post
+	var posts []model.Post
 	var ids []string
 	for rows.Next() {
 		p, err := scanPost(rows)
@@ -152,12 +143,12 @@ func (s *Store) findPosts(ctx context.Context, f PostFilter, page, size int64) (
 		posts[i].Tags = tagMap[posts[i].ID]
 	}
 	if posts == nil {
-		posts = []Post{}
+		posts = []model.Post{}
 	}
-	return &PostListResult{Posts: posts, Total: total, Page: page, Size: size}, nil
+	return &model.PostListResult{Posts: posts, Total: total, Page: page, Size: size}, nil
 }
 
-func (s *Store) countPosts(ctx context.Context, f PostFilter) (int64, error) {
+func (s *Store) CountPosts(ctx context.Context, f model.PostFilter) (int64, error) {
 	var conditions []string
 	var args []any
 	if f.Status != "" {
@@ -173,7 +164,7 @@ func (s *Store) countPosts(ctx context.Context, f PostFilter) (int64, error) {
 	return count, err
 }
 
-func (s *Store) findPost(ctx context.Context, id string) (*Post, error) {
+func (s *Store) FindPost(ctx context.Context, id string) (*model.Post, error) {
 	row := s.db.QueryRowContext(ctx,
 		"SELECT id, title, content, content_html, summary, date, category, status, encrypted, enc_salt, enc_nonce, enc_cipher, created_at, updated_at FROM posts WHERE id = ?", id)
 	p, err := scanPost(row)
@@ -188,14 +179,14 @@ func (s *Store) findPost(ctx context.Context, id string) (*Post, error) {
 	return p, nil
 }
 
-func (s *Store) insertPost(ctx context.Context, p *Post) error {
+func (s *Store) InsertPost(ctx context.Context, p *model.Post) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	enc := p.encryptionData()
+	enc := p.EncryptionData()
 	_, err = tx.ExecContext(ctx,
 		"INSERT INTO posts (id, title, content, content_html, summary, date, category, status, encrypted, enc_salt, enc_nonce, enc_cipher, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		p.ID, p.Title, p.Content, p.ContentHTML, p.Summary, p.Date, p.Category, p.Status, boolToInt(p.Encrypted),
@@ -209,14 +200,14 @@ func (s *Store) insertPost(ctx context.Context, p *Post) error {
 	return tx.Commit()
 }
 
-func (s *Store) replacePost(ctx context.Context, p *Post) error {
+func (s *Store) ReplacePost(ctx context.Context, p *model.Post) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	enc := p.encryptionData()
+	enc := p.EncryptionData()
 	_, err = tx.ExecContext(ctx,
 		"UPDATE posts SET title=?, content=?, content_html=?, summary=?, date=?, category=?, status=?, encrypted=?, enc_salt=?, enc_nonce=?, enc_cipher=?, updated_at=? WHERE id=?",
 		p.Title, p.Content, p.ContentHTML, p.Summary, p.Date, p.Category, p.Status, boolToInt(p.Encrypted),
@@ -230,7 +221,7 @@ func (s *Store) replacePost(ctx context.Context, p *Post) error {
 	return tx.Commit()
 }
 
-func (s *Store) deletePost(ctx context.Context, id string) error {
+func (s *Store) DeletePost(ctx context.Context, id string) error {
 	res, err := s.db.ExecContext(ctx, "DELETE FROM posts WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("delete post: %w", err)
@@ -242,7 +233,7 @@ func (s *Store) deletePost(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *Store) postExists(ctx context.Context, id string) bool {
+func (s *Store) PostExists(ctx context.Context, id string) bool {
 	var exists int
 	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM posts WHERE id = ?", id).Scan(&exists)
 	return err == nil && exists == 1
@@ -250,7 +241,7 @@ func (s *Store) postExists(ctx context.Context, id string) bool {
 
 // --- Tags ---
 
-func (s *Store) allTags(ctx context.Context) ([]string, error) {
+func (s *Store) AllTags(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT name FROM tags ORDER BY name")
 	if err != nil {
 		return nil, fmt.Errorf("query tags: %w", err)
@@ -269,6 +260,67 @@ func (s *Store) allTags(ctx context.Context) ([]string, error) {
 		tags = []string{}
 	}
 	return tags, nil
+}
+
+// --- Admin ---
+
+func (s *Store) UpsertAdmin(ctx context.Context, username, passwordHash string) error {
+	_, err := s.db.ExecContext(ctx,
+		"INSERT INTO admin (username, password_hash) VALUES (?, ?) ON CONFLICT(username) DO UPDATE SET password_hash = ?",
+		username, passwordHash, passwordHash)
+	return err
+}
+
+func (s *Store) FindAdmin(ctx context.Context, username string) (*model.AdminUser, error) {
+	var u model.AdminUser
+	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash FROM admin WHERE username = ?", username).Scan(&u.Username, &u.PasswordHash)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// --- Settings ---
+
+func (s *Store) GetSettings(ctx context.Context) (*model.BlogSettings, error) {
+	var bs model.BlogSettings
+	err := s.db.QueryRowContext(ctx, "SELECT title, subtitle FROM settings WHERE id = 1").Scan(&bs.Title, &bs.Subtitle)
+	if err != nil {
+		return &model.BlogSettings{}, nil
+	}
+	return &bs, nil
+}
+
+func (s *Store) UpsertSettings(ctx context.Context, bs *model.BlogSettings) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE settings SET title = ?, subtitle = ? WHERE id = 1", bs.Title, bs.Subtitle)
+	return err
+}
+
+// --- internal helpers ---
+
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPost(s scanner) (*model.Post, error) {
+	var p model.Post
+	var encrypted int
+	var encSalt, encNonce, encCipher string
+	var createdAt, updatedAt string
+
+	err := s.Scan(&p.ID, &p.Title, &p.Content, &p.ContentHTML, &p.Summary, &p.Date,
+		&p.Category, &p.Status, &encrypted,
+		&encSalt, &encNonce, &encCipher, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	p.Encrypted = encrypted != 0
+	if p.Encrypted {
+		p.Encryption = &model.EncryptionData{Salt: encSalt, Nonce: encNonce, Ciphertext: encCipher}
+	}
+	p.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return &p, nil
 }
 
 func (s *Store) postTags(ctx context.Context, postID string) ([]string, error) {
@@ -335,80 +387,9 @@ func (s *Store) setPostTagsTx(ctx context.Context, tx *sql.Tx, postID string, ta
 	return nil
 }
 
-// --- Admin ---
-
-func (s *Store) upsertAdmin(ctx context.Context, username, passwordHash string) error {
-	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO admin (username, password_hash) VALUES (?, ?) ON CONFLICT(username) DO UPDATE SET password_hash = ?",
-		username, passwordHash, passwordHash)
-	return err
-}
-
-func (s *Store) findAdmin(ctx context.Context, username string) (*AdminUser, error) {
-	var u AdminUser
-	err := s.db.QueryRowContext(ctx, "SELECT username, password_hash FROM admin WHERE username = ?", username).Scan(&u.Username, &u.PasswordHash)
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
-}
-
-// --- Settings ---
-
-func (s *Store) getSettings(ctx context.Context) (*BlogSettings, error) {
-	var bs BlogSettings
-	err := s.db.QueryRowContext(ctx, "SELECT title, subtitle FROM settings WHERE id = 1").Scan(&bs.Title, &bs.Subtitle)
-	if err != nil {
-		return &BlogSettings{}, nil
-	}
-	return &bs, nil
-}
-
-func (s *Store) upsertSettings(ctx context.Context, bs *BlogSettings) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE settings SET title = ?, subtitle = ? WHERE id = 1", bs.Title, bs.Subtitle)
-	return err
-}
-
-// --- Scan helpers ---
-
-// scanner abstracts sql.Row and sql.Rows for a shared scanPost helper.
-type scanner interface {
-	Scan(dest ...any) error
-}
-
-func scanPost(s scanner) (*Post, error) {
-	var p Post
-	var encrypted int
-	var encSalt, encNonce, encCipher string
-	var createdAt, updatedAt string
-
-	err := s.Scan(&p.ID, &p.Title, &p.Content, &p.ContentHTML, &p.Summary, &p.Date,
-		&p.Category, &p.Status, &encrypted,
-		&encSalt, &encNonce, &encCipher, &createdAt, &updatedAt)
-	if err != nil {
-		return nil, err
-	}
-	p.Encrypted = encrypted != 0
-	if p.Encrypted {
-		p.Encryption = &EncryptionData{Salt: encSalt, Nonce: encNonce, Ciphertext: encCipher}
-	}
-	p.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-	p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
-	return &p, nil
-}
-
-// --- Helpers ---
-
 func boolToInt(b bool) int {
 	if b {
 		return 1
 	}
 	return 0
-}
-
-func (p *Post) encryptionData() EncryptionData {
-	if p.Encryption != nil {
-		return *p.Encryption
-	}
-	return EncryptionData{}
 }

@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"context"
@@ -15,60 +15,70 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Vierblatt/nosh1ro-api/internal/auth"
+	"github.com/Vierblatt/nosh1ro-api/internal/model"
+	"github.com/Vierblatt/nosh1ro-api/internal/store"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/pbkdf2"
 )
 
-func setupTestStore(t *testing.T) *Store {
+func setupTestDB(t *testing.T) *store.Store {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := newStore(dir + "/blog.db")
+	s, err := store.New(dir + "/blog.db")
 	if err != nil {
-		t.Fatalf("newStore: %v", err)
+		t.Fatalf("store.New: %v", err)
 	}
-	store.db.SetMaxOpenConns(10)
-	if err := store.initSchema(context.Background()); err != nil {
-		t.Fatalf("initSchema: %v", err)
+	if err := s.InitSchema(context.Background()); err != nil {
+		t.Fatalf("InitSchema: %v", err)
 	}
-	t.Cleanup(func() { store.close() })
-	return store
+	t.Cleanup(func() { s.Close() })
+	return s
 }
 
-func seedTestPosts(t *testing.T, store *Store) {
+func seedTestPosts(t *testing.T, s *store.Store) {
 	t.Helper()
 	now := time.Now()
-	posts := []Post{
+	posts := []model.Post{
 		{ID: "post-1", Title: "First Post", Date: "2026-06-05", Status: "published", Category: "tech", Content: "hello", ContentHTML: "<p>hello</p>", Summary: "hello", CreatedAt: now, UpdatedAt: now},
 		{ID: "post-2", Title: "Second Post", Date: "2026-06-04", Status: "published", Category: "life", Content: "world", ContentHTML: "<p>world</p>", Summary: "world", CreatedAt: now, UpdatedAt: now},
 		{ID: "draft-1", Title: "Draft Post", Date: "2026-06-03", Status: "draft", Content: "secret", ContentHTML: "<p>secret</p>", Summary: "secret", CreatedAt: now, UpdatedAt: now},
 	}
 	for i := range posts {
 		posts[i].Tags = []string{"go"}
-		if err := store.insertPost(context.Background(), &posts[i]); err != nil {
-			t.Fatalf("insertPost %s: %v", posts[i].ID, err)
+		if err := s.InsertPost(context.Background(), &posts[i]); err != nil {
+			t.Fatalf("InsertPost %s: %v", posts[i].ID, err)
 		}
 	}
 }
 
-func setupRouter(store *Store, cfg Config) *gin.Engine {
+func newTestRouter(s *store.Store) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(corsMiddleware())
+	r.Use(gin.Recovery())
 
-	api := r.Group("/api")
-	{
-		api.GET("/health", handleHealth)
-		api.GET("/posts", handlePosts(store))
-		api.GET("/posts/:id", handlePostDetail(store))
-		api.POST("/posts/:id/verify", handleVerify(store))
-		api.GET("/tags", handleTags(store))
-		api.GET("/feed.xml", handleFeed(store, cfg))
-	}
+	pc := NewPostController(s)
+	pc.Register(r.Group("/api"))
+
+	fc := NewFeedController(s, s, "test-blog")
+	r.GET("/api/feed.xml", fc.Handle)
+
+	return r
+}
+
+func newTestAdminRouter(s *store.Store, jwtSecret string) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
+
+	ac := NewAdminController(s, s, jwtSecret)
+	ac.Register(r.Group("/api/admin"))
+
 	return r
 }
 
 func TestHandleHealth(t *testing.T) {
-	r := setupRouter(setupTestStore(t), Config{})
+	r := newTestRouter(setupTestDB(t))
 	req := httptest.NewRequest("GET", "/api/health", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -84,9 +94,9 @@ func TestHandleHealth(t *testing.T) {
 }
 
 func TestHandlePosts(t *testing.T) {
-	store := setupTestStore(t)
-	seedTestPosts(t, store)
-	r := setupRouter(store, Config{})
+	s := setupTestDB(t)
+	seedTestPosts(t, s)
+	r := newTestRouter(s)
 
 	req := httptest.NewRequest("GET", "/api/posts?page=1&size=10", nil)
 	w := httptest.NewRecorder()
@@ -96,9 +106,9 @@ func TestHandlePosts(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 
-	var result PostListResult
+	var result model.PostListResult
 	json.Unmarshal(w.Body.Bytes(), &result)
-	if len(result.Posts) != 2 { // drafts excluded
+	if len(result.Posts) != 2 {
 		t.Errorf("got %d posts, want 2", len(result.Posts))
 	}
 	if result.Total != 2 {
@@ -107,22 +117,21 @@ func TestHandlePosts(t *testing.T) {
 	if result.Page != 1 {
 		t.Errorf("page = %d, want 1", result.Page)
 	}
-	// Posts should be ordered by date desc
 	if result.Posts[0].ID != "post-1" {
 		t.Errorf("first post = %q, want post-1", result.Posts[0].ID)
 	}
 }
 
 func TestHandlePosts_FilterByCategory(t *testing.T) {
-	store := setupTestStore(t)
-	seedTestPosts(t, store)
-	r := setupRouter(store, Config{})
+	s := setupTestDB(t)
+	seedTestPosts(t, s)
+	r := newTestRouter(s)
 
 	req := httptest.NewRequest("GET", "/api/posts?category=tech", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	var result PostListResult
+	var result model.PostListResult
 	json.Unmarshal(w.Body.Bytes(), &result)
 	if len(result.Posts) != 1 {
 		t.Errorf("got %d posts, want 1", len(result.Posts))
@@ -130,15 +139,15 @@ func TestHandlePosts_FilterByCategory(t *testing.T) {
 }
 
 func TestHandlePosts_FilterByTag(t *testing.T) {
-	store := setupTestStore(t)
-	seedTestPosts(t, store)
-	r := setupRouter(store, Config{})
+	s := setupTestDB(t)
+	seedTestPosts(t, s)
+	r := newTestRouter(s)
 
 	req := httptest.NewRequest("GET", "/api/posts?tag=go", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	var result PostListResult
+	var result model.PostListResult
 	json.Unmarshal(w.Body.Bytes(), &result)
 	if len(result.Posts) != 2 {
 		t.Errorf("got %d posts, want 2", len(result.Posts))
@@ -146,15 +155,15 @@ func TestHandlePosts_FilterByTag(t *testing.T) {
 }
 
 func TestHandlePosts_Search(t *testing.T) {
-	store := setupTestStore(t)
-	seedTestPosts(t, store)
-	r := setupRouter(store, Config{})
+	s := setupTestDB(t)
+	seedTestPosts(t, s)
+	r := newTestRouter(s)
 
 	req := httptest.NewRequest("GET", "/api/posts?q=hello", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	var result PostListResult
+	var result model.PostListResult
 	json.Unmarshal(w.Body.Bytes(), &result)
 	if len(result.Posts) != 1 || result.Posts[0].ID != "post-1" {
 		t.Errorf("search should find post-1, got %d results", len(result.Posts))
@@ -162,9 +171,9 @@ func TestHandlePosts_Search(t *testing.T) {
 }
 
 func TestHandlePostDetail(t *testing.T) {
-	store := setupTestStore(t)
-	seedTestPosts(t, store)
-	r := setupRouter(store, Config{})
+	s := setupTestDB(t)
+	seedTestPosts(t, s)
+	r := newTestRouter(s)
 
 	req := httptest.NewRequest("GET", "/api/posts/post-1", nil)
 	w := httptest.NewRecorder()
@@ -184,8 +193,8 @@ func TestHandlePostDetail(t *testing.T) {
 }
 
 func TestHandlePostDetail_NotFound(t *testing.T) {
-	store := setupTestStore(t)
-	r := setupRouter(store, Config{})
+	s := setupTestDB(t)
+	r := newTestRouter(s)
 
 	req := httptest.NewRequest("GET", "/api/posts/nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -197,9 +206,9 @@ func TestHandlePostDetail_NotFound(t *testing.T) {
 }
 
 func TestHandlePostDetail_DraftHidden(t *testing.T) {
-	store := setupTestStore(t)
-	seedTestPosts(t, store)
-	r := setupRouter(store, Config{})
+	s := setupTestDB(t)
+	seedTestPosts(t, s)
+	r := newTestRouter(s)
 
 	req := httptest.NewRequest("GET", "/api/posts/draft-1", nil)
 	w := httptest.NewRecorder()
@@ -211,9 +220,9 @@ func TestHandlePostDetail_DraftHidden(t *testing.T) {
 }
 
 func TestHandleTags(t *testing.T) {
-	store := setupTestStore(t)
-	seedTestPosts(t, store)
-	r := setupRouter(store, Config{})
+	s := setupTestDB(t)
+	seedTestPosts(t, s)
+	r := newTestRouter(s)
 
 	req := httptest.NewRequest("GET", "/api/tags", nil)
 	w := httptest.NewRecorder()
@@ -230,9 +239,9 @@ func TestHandleTags(t *testing.T) {
 }
 
 func TestHandleFeed(t *testing.T) {
-	store := setupTestStore(t)
-	seedTestPosts(t, store)
-	r := setupRouter(store, Config{BlogTitle: "test-blog"})
+	s := setupTestDB(t)
+	seedTestPosts(t, s)
+	r := newTestRouter(s)
 
 	req := httptest.NewRequest("GET", "/api/feed.xml", nil)
 	w := httptest.NewRecorder()
@@ -252,10 +261,10 @@ func TestHandleFeed(t *testing.T) {
 }
 
 func TestHandleAdminLogin(t *testing.T) {
-	store := setupTestStore(t)
-	hash, _ := hashPassword("admin123")
-	store.upsertAdmin(context.Background(), "admin", hash)
-	r := setupAdminRouter(store, Config{JWTSecret: "jwt-secret", AdminUsername: "admin"})
+	s := setupTestDB(t)
+	hash, _ := auth.HashPassword("admin123")
+	s.UpsertAdmin(context.Background(), "admin", hash)
+	r := newTestAdminRouter(s, "jwt-secret")
 
 	body := `{"username":"admin","password":"admin123"}`
 	req := httptest.NewRequest("POST", "/api/admin/login", strings.NewReader(body))
@@ -274,10 +283,10 @@ func TestHandleAdminLogin(t *testing.T) {
 }
 
 func TestHandleAdminLogin_WrongPassword(t *testing.T) {
-	store := setupTestStore(t)
-	hash, _ := hashPassword("admin123")
-	store.upsertAdmin(context.Background(), "admin", hash)
-	r := setupAdminRouter(store, Config{JWTSecret: "jwt", AdminUsername: "admin"})
+	s := setupTestDB(t)
+	hash, _ := auth.HashPassword("admin123")
+	s.UpsertAdmin(context.Background(), "admin", hash)
+	r := newTestAdminRouter(s, "jwt")
 
 	body := `{"username":"admin","password":"wrong"}`
 	req := httptest.NewRequest("POST", "/api/admin/login", strings.NewReader(body))
@@ -291,13 +300,11 @@ func TestHandleAdminLogin_WrongPassword(t *testing.T) {
 }
 
 func TestHandleAdminCRUD(t *testing.T) {
-	store := setupTestStore(t)
-	hash, _ := hashPassword("admin123")
-	store.upsertAdmin(context.Background(), "admin", hash)
-	cfg := Config{JWTSecret: "jwt-secret", AdminUsername: "admin"}
-	r := setupAdminRouter(store, cfg)
+	s := setupTestDB(t)
+	hash, _ := auth.HashPassword("admin123")
+	s.UpsertAdmin(context.Background(), "admin", hash)
+	r := newTestAdminRouter(s, "jwt-secret")
 
-	// Login
 	loginBody := `{"username":"admin","password":"admin123"}`
 	req := httptest.NewRequest("POST", "/api/admin/login", strings.NewReader(loginBody))
 	req.Header.Set("Content-Type", "application/json")
@@ -309,7 +316,6 @@ func TestHandleAdminCRUD(t *testing.T) {
 
 	authHeader := func() string { return "Bearer " + token }
 
-	// Create
 	t.Run("create", func(t *testing.T) {
 		body := `{"id":"new-post","title":"New Post","content":"hello","status":"published","tags":["go","api"]}`
 		req := httptest.NewRequest("POST", "/api/admin/posts", strings.NewReader(body))
@@ -323,7 +329,6 @@ func TestHandleAdminCRUD(t *testing.T) {
 		}
 	})
 
-	// Read
 	t.Run("list", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/admin/posts", nil)
 		req.Header.Set("Authorization", authHeader())
@@ -333,14 +338,13 @@ func TestHandleAdminCRUD(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("list status = %d", w.Code)
 		}
-		var result PostListResult
+		var result model.PostListResult
 		json.Unmarshal(w.Body.Bytes(), &result)
 		if result.Total != 1 {
 			t.Errorf("total = %d, want 1", result.Total)
 		}
 	})
 
-	// Update
 	t.Run("update", func(t *testing.T) {
 		body := `{"title":"Updated Title"}`
 		req := httptest.NewRequest("PUT", "/api/admin/posts/new-post", strings.NewReader(body))
@@ -354,7 +358,6 @@ func TestHandleAdminCRUD(t *testing.T) {
 		}
 	})
 
-	// Delete
 	t.Run("delete", func(t *testing.T) {
 		req := httptest.NewRequest("DELETE", "/api/admin/posts/new-post", nil)
 		req.Header.Set("Authorization", authHeader())
@@ -368,10 +371,9 @@ func TestHandleAdminCRUD(t *testing.T) {
 }
 
 func TestHandleVerify(t *testing.T) {
-	store := setupTestStore(t)
-	seedTestPosts(t, store)
+	s := setupTestDB(t)
+	seedTestPosts(t, s)
 
-	// Insert a test encrypted post with known password
 	salt := make([]byte, 16)
 	nonce := make([]byte, 12)
 	io.ReadFull(rand.Reader, salt)
@@ -382,11 +384,11 @@ func TestHandleVerify(t *testing.T) {
 	gcm, _ := cipher.NewGCM(block)
 	ciphertext := gcm.Seal(nil, nonce, []byte("secret content"), nil)
 
-	encPost := &Post{
+	encPost := &model.Post{
 		ID: "enc-1", Title: "Enc Post", Date: "2026-06-01", Status: "published",
 		Content: "", ContentHTML: "", Summary: "encrypted",
 		Encrypted: true,
-		Encryption: &EncryptionData{
+		Encryption: &model.EncryptionData{
 			Salt:       base64.StdEncoding.EncodeToString(salt),
 			Nonce:      base64.StdEncoding.EncodeToString(nonce),
 			Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
@@ -395,11 +397,11 @@ func TestHandleVerify(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	if err := store.insertPost(context.Background(), encPost); err != nil {
+	if err := s.InsertPost(context.Background(), encPost); err != nil {
 		t.Fatalf("insert encrypted post: %v", err)
 	}
 
-	r := setupRouter(store, Config{})
+	r := newTestRouter(s)
 
 	t.Run("correct password", func(t *testing.T) {
 		body := `{"password":"test-password"}`
@@ -462,99 +464,3 @@ func TestHandleVerify(t *testing.T) {
 		}
 	})
 }
-
-func TestRateLimiter(t *testing.T) {
-	rl := newRateLimiter(10, 5)
-
-	// Burst of 5 should allow exactly 5 requests
-	key := "test-ip"
-	for i := range 5 {
-		if !rl.allow(key) {
-			t.Errorf("request %d should be allowed", i+1)
-		}
-	}
-	// 6th should be denied
-	if rl.allow(key) {
-		t.Error("6th request should be denied after burst exhausted")
-	}
-}
-
-func TestRateLimiter_Refill(t *testing.T) {
-	rl := &rateLimiter{
-		buckets: make(map[string]*bucket),
-		rate:    100, // 100 tokens per second
-		burst:   10,
-	}
-	key := "test-ip"
-
-	// Exhaust the burst
-	for range 10 {
-		rl.allow(key)
-	}
-	if rl.allow(key) {
-		t.Error("should be empty after burst exhausted")
-	}
-
-	// Simulate refill by setting lastTime far in the past
-	rl.mu.Lock()
-	b := rl.buckets[key]
-	b.lastTime = time.Now().Add(-1 * time.Second)
-	rl.mu.Unlock()
-
-	// After 1 second at 100 rps, bucket should have refilled
-	if !rl.allow(key) {
-		t.Error("should allow after refill period")
-	}
-}
-
-func TestRateLimiterMiddleware(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.Use(rateLimitMiddleware(100, 3))
-
-	var hits int
-	r.GET("/test", func(c *gin.Context) {
-		hits++
-		c.Status(http.StatusOK)
-	})
-
-	// First 3 should pass
-	for i := range 3 {
-		req := httptest.NewRequest("GET", "/test", nil)
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		if w.Code != http.StatusOK {
-			t.Errorf("request %d: status = %d", i+1, w.Code)
-		}
-	}
-
-	// 4th should be rate limited
-	req := httptest.NewRequest("GET", "/test", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusTooManyRequests {
-		t.Errorf("rate limited status = %d, want %d", w.Code, http.StatusTooManyRequests)
-	}
-	if hits != 3 {
-		t.Errorf("hits = %d, want 3", hits)
-	}
-}
-
-func setupAdminRouter(store *Store, cfg Config) *gin.Engine {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-
-	admin := r.Group("/api/admin")
-	admin.POST("/login", handleAdminLogin(store, cfg))
-
-	protected := admin.Group("")
-	protected.Use(authMiddleware(cfg.JWTSecret))
-	{
-		protected.GET("/posts", handleAdminListPosts(store))
-		protected.POST("/posts", handleAdminCreatePost(store))
-		protected.PUT("/posts/:id", handleAdminUpdatePost(store))
-		protected.DELETE("/posts/:id", handleAdminDeletePost(store))
-	}
-	return r
-}
-

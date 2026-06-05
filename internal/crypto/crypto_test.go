@@ -1,4 +1,4 @@
-package main
+package crypto
 
 import (
 	"crypto/aes"
@@ -10,10 +10,11 @@ import (
 	"os"
 	"testing"
 
+	"github.com/Vierblatt/nosh1ro-api/internal/model"
 	"golang.org/x/crypto/pbkdf2"
 )
 
-func makeTestEncryption(password, plaintext string) *EncryptionData {
+func makeTestEncryption(password, plaintext string) *model.EncryptionData {
 	salt := make([]byte, 16)
 	io.ReadFull(rand.Reader, salt)
 	nonce := make([]byte, 12)
@@ -22,7 +23,7 @@ func makeTestEncryption(password, plaintext string) *EncryptionData {
 	block, _ := aes.NewCipher(key)
 	gcm, _ := cipher.NewGCM(block)
 	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), nil)
-	return &EncryptionData{
+	return &model.EncryptionData{
 		Salt:       base64.StdEncoding.EncodeToString(salt),
 		Nonce:      base64.StdEncoding.EncodeToString(nonce),
 		Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
@@ -31,9 +32,9 @@ func makeTestEncryption(password, plaintext string) *EncryptionData {
 
 func TestDecryptContent_Success(t *testing.T) {
 	enc := makeTestEncryption("password123", "hello world")
-	plain, err := decryptContent(enc, "password123")
+	plain, err := DecryptContent(enc, "password123")
 	if err != nil {
-		t.Fatalf("decryptContent: %v", err)
+		t.Fatalf("DecryptContent: %v", err)
 	}
 	if plain != "hello world" {
 		t.Errorf("plain = %q, want %q", plain, "hello world")
@@ -42,15 +43,15 @@ func TestDecryptContent_Success(t *testing.T) {
 
 func TestDecryptContent_WrongPassword(t *testing.T) {
 	enc := makeTestEncryption("password123", "hello world")
-	_, err := decryptContent(enc, "wrong")
+	_, err := DecryptContent(enc, "wrong")
 	if err == nil {
 		t.Error("expected error with wrong password")
 	}
 }
 
 func TestDecryptContent_InvalidSalt(t *testing.T) {
-	enc := &EncryptionData{Salt: "!!!invalid!!!", Nonce: "AAAA", Ciphertext: "AAAA"}
-	_, err := decryptContent(enc, "pw")
+	enc := &model.EncryptionData{Salt: "!!!invalid!!!", Nonce: "AAAA", Ciphertext: "AAAA"}
+	_, err := DecryptContent(enc, "pw")
 	if err == nil {
 		t.Error("expected error with invalid salt")
 	}
@@ -60,13 +61,13 @@ func TestLoadEncryptionJSONField(t *testing.T) {
 	os.WriteFile("_test.json", []byte(`{"salt":"abc","nonce":"def","ciphertext":"ghi"}`), 0644)
 	defer os.Remove("_test.json")
 
-	if s := loadEncryptionJSONField("_test.json", "salt"); s != "abc" {
+	if s := LoadEncryptionJSONField("_test.json", "salt"); s != "abc" {
 		t.Errorf("salt = %q, want %q", s, "abc")
 	}
-	if s := loadEncryptionJSONField("_test.json", "nonce"); s != "def" {
+	if s := LoadEncryptionJSONField("_test.json", "nonce"); s != "def" {
 		t.Errorf("nonce = %q, want %q", s, "def")
 	}
-	if s := loadEncryptionJSONField("_test.json", "ciphertext"); s != "ghi" {
+	if s := LoadEncryptionJSONField("_test.json", "ciphertext"); s != "ghi" {
 		t.Errorf("ciphertext = %q, want %q", s, "ghi")
 	}
 }
