@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -24,14 +25,22 @@ import (
 
 func setupTestDB(t *testing.T) *store.Store {
 	t.Helper()
-	dir := t.TempDir()
-	s, err := store.New("sqlite", dir+"/blog.db")
+	dsn := os.Getenv("TEST_DSN")
+	if dsn == "" {
+		dsn = "root:password@tcp(127.0.0.1:3306)/blog_test?charset=utf8mb4&parseTime=true&loc=Local&multiStatements=true"
+	}
+	s, err := store.New(dsn)
 	if err != nil {
-		t.Fatalf("store.New: %v", err)
+		t.Skipf("skipping test — cannot connect to MySQL (set TEST_DSN): %v", err)
+	}
+	if err := s.Ping(context.Background()); err != nil {
+		t.Skipf("skipping test — MySQL not reachable (set TEST_DSN): %v", err)
 	}
 	if err := s.InitSchema(context.Background()); err != nil {
 		t.Fatalf("InitSchema: %v", err)
 	}
+	// 清空测试数据，保证每个测试都从干净状态开始
+	s.ResetAll(context.Background())
 	t.Cleanup(func() { s.Close() })
 	return s
 }
